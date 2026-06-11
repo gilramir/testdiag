@@ -48,12 +48,18 @@ worker pool → write a report each.
   the root, and symlinks are evaluated and re-prefix-checked so they can't escape.
   Every file tool must go through this; don't add direct `os.Open` on
   model-supplied paths elsewhere.
-- **`internal/tools`** — the five read-only tools (`read_file`, `list_directory`,
-  `count_lines`, `read_lines`, `grep`) exposed to the model. They implement
-  `v1beta.Tool` with a `JSONSchema()` so the provider calls them natively.
-  `Register(ws)` registers them **once at startup** via the global
-  `vnext.RegisterInternalTool` before any agent is built. All have hard output
-  caps (file size, line span, match/entry counts) to protect the context window.
+- **`internal/tools`** — the read-only tools exposed to the model, all jailed to
+  the workspace: single-file (`read_file`, `list_directory`, `count_lines`,
+  `read_lines`, `grep`), tree-wide (`search_repo` recursive grep, `find_files`
+  glob/substring locate), version control (`git_blame`, `git_log` — scoped to a
+  jailed path via a `--` pathspec, pager disabled, output byte-capped), and
+  log-oriented (`read_log` with `tail`, `grep_log` with context lines). They
+  implement `v1beta.Tool` with a `JSONSchema()` so the provider calls them
+  natively. `Register(ws)` registers them **once at startup** via the global
+  `vnext.RegisterInternalTool` before any agent is built, so each tool is a
+  single shared, **stateless** instance (workers run concurrently — never store
+  per-test state on a tool). All have hard output caps (file size, line span,
+  match/entry/file counts) to protect the context window.
 - **`internal/diagnose`** — the core. `Diagnoser.Diagnose` maps the test, saves
   the full failure log under `<workspace>/.testdiag/logs/` (so the jailed tools
   can read it), builds a **fresh agent per test** (memory disabled, reasoning

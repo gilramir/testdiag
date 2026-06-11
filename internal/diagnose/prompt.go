@@ -22,10 +22,16 @@ You have read-only tools to explore the workspace the test ran against:
 - list_directory(path): list a directory's entries.
 - count_lines(paths): line counts (like wc -l) for one or more files — use this to size a file BEFORE reading it.
 - read_lines(path, start, end): read a single line or an inclusive range.
-- grep(path, pattern, ignore_case): find matching lines (with line numbers) in a file.
+- grep(path, pattern, ignore_case): find matching lines (with line numbers) in ONE file.
 - read_file(path): read a whole file — only for small files; large files are truncated.
+- find_files(pattern, path): locate files by name/glob (e.g. "*Test.java", "foo_client.py") across the tree — use this to FIND the test's source instead of guessing paths.
+- search_repo(pattern, path, include, ignore_case): recursively grep the WHOLE tree for a symbol or error string — use this when you don't yet know which file holds something.
+- git_blame(path, start, end): who/what/when last changed a line range — recent churn often explains a newly flaky test.
+- git_log(path, limit, patch): recent commits (optionally with diffs) that touched a file — see WHAT changed lately.
+- read_log(path, tail): read the failure log with line numbers; use tail=N to jump to the end where the fatal error usually is.
+- grep_log(path, pattern, context, ignore_case): grep the log returning matches WITH surrounding context — ideal for reading the stack frames around the first error.
 
-The complete failure log has been saved to a file in the workspace; you are given its path. Treat it like any other large file: grep it for the first error and read_lines around the interesting parts rather than expecting it all inline.
+The complete failure log has been saved to a file in the workspace; you are given its path. Treat it like any other large file: grep_log it for the first error and read_lines/read_log around the interesting parts rather than expecting it all inline. A productive investigation loop is: grep_log for the first error → find_files / search_repo to locate the source it points at → read_lines there → git_blame / git_log on the suspect lines to check whether a recent change introduced the nondeterminism.
 
 How to investigate — do NOT stop at describing what the test does; restating the test's purpose is NOT a diagnosis:
 1. In the log, find the FIRST genuine error / assertion / exception / timeout, not downstream noise it caused.
