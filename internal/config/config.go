@@ -48,6 +48,9 @@ type LLM struct {
 	// tool-aware chat templates advertise the tools to the model. On by default;
 	// disable if a server rejects requests that carry tools.
 	InjectTools bool `toml:"inject_tools"`
+	// Debug logs the full request/response conversation with the LLM to stderr.
+	// Off by default; the --debug CLI flag also turns it on.
+	Debug bool `toml:"debug"`
 }
 
 // Workspace describes the local checkout the failing tests came from. The
@@ -134,6 +137,7 @@ func applyEnvOverrides(cfg *Config) {
 	setInt(&cfg.LLM.MaxTokens, "TESTDIAG_LLM_MAX_TOKENS")
 	setBool(&cfg.LLM.NormalizeToolCalls, "TESTDIAG_LLM_NORMALIZE_TOOL_CALLS")
 	setBool(&cfg.LLM.InjectTools, "TESTDIAG_LLM_INJECT_TOOLS")
+	setBool(&cfg.LLM.Debug, "TESTDIAG_LLM_DEBUG")
 
 	setStr(&cfg.Workspace.Root, "TESTDIAG_WORKSPACE_ROOT")
 

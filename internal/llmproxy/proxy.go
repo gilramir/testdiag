@@ -15,11 +15,15 @@
 //     native syntax in the content, or a structured tool_calls field — into the
 //     canonical TOOL_CALL{...} text the agent reliably parses (see toolproto).
 //
+// Because every request and response flows through here, it is also the natural
+// place to log the full conversation with the LLM for debugging (Options.Debug).
+//
 // Point cfg.LLM.BaseURL at BaseURL() and the rest of the program is unchanged.
 package llmproxy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -27,7 +31,10 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/gilbertr/testdiag/internal/toolproto"
 )
@@ -40,6 +47,18 @@ type Tool struct {
 	Parameters  map[string]interface{}
 }
 
+// Options configures a proxy.
+type Options struct {
+	// Tools, if non-empty, is injected into every chat-completions request.
+	Tools []Tool
+	// Normalize rewrites each model's native tool-call syntax in responses into
+	// the canonical TOOL_CALL text AgenticGoKit parses. When false the proxy
+	// passes responses through unchanged (useful when only Debug is wanted).
+	Normalize bool
+	// Debug logs the full request/response conversation with the LLM to stderr.
+	Debug bool
+}
+
 // Proxy is a running normalizing reverse proxy. Close it when done.
 type Proxy struct {
 	listener net.Listener
@@ -47,11 +66,14 @@ type Proxy struct {
 	baseURL  string
 }
 
+// debugIDKey tags a request's context with its debug sequence number so the
+// response logged later can be correlated with the request that produced it.
+type debugIDKey struct{}
+
 // Start launches the proxy in front of upstreamBaseURL (e.g.
-// http://localhost:1234/v1), listening on an ephemeral localhost port. If tools
-// is non-empty, it is injected into every chat-completions request. The proxy
-// is serving by the time Start returns.
-func Start(upstreamBaseURL string, tools []Tool) (*Proxy, error) {
+// http://localhost:1234/v1), listening on an ephemeral localhost port. The
+// proxy is serving by the time Start returns.
+func Start(upstreamBaseURL string, opts Options) (*Proxy, error) {
 	target, err := url.Parse(strings.TrimSuffix(upstreamBaseURL, "/"))
 	if err != nil {
 		return nil, fmt.Errorf("parsing upstream base URL %q: %w", upstreamBaseURL, err)
@@ -60,7 +82,10 @@ func Start(upstreamBaseURL string, tools []Tool) (*Proxy, error) {
 		return nil, fmt.Errorf("upstream base URL %q must be absolute (scheme://host)", upstreamBaseURL)
 	}
 
-	openAITools := toOpenAITools(tools)
+	openAITools := toOpenAITools(opts.Tools)
+	debug := opts.Debug
+	normalize := opts.Normalize
+	var reqCounter atomic.Uint64
 
 	rp := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
@@ -72,11 +97,28 @@ func Start(upstreamBaseURL string, tools []Tool) (*Proxy, error) {
 			req.Host = target.Host
 			// Ask for an unencoded body so ModifyResponse can rewrite it.
 			req.Header.Set("Accept-Encoding", "identity")
-			if isChatCompletions(reqPath) && len(openAITools) > 0 {
-				injectTools(req, openAITools)
+
+			inject := isChatCompletions(reqPath) && len(openAITools) > 0
+			if !inject && !debug {
+				return
 			}
+			body, raw, ok := readJSONBody(req)
+			if !ok {
+				return // readJSONBody restored the body as-is
+			}
+			if inject {
+				injectTools(body, openAITools)
+			}
+			if debug {
+				id := reqCounter.Add(1)
+				*req = *req.WithContext(context.WithValue(req.Context(), debugIDKey{}, id))
+				logRequest(id, reqPath, body)
+			}
+			setBody(req, body, raw)
 		},
-		ModifyResponse: normalizeResponse,
+		ModifyResponse: func(resp *http.Response) error {
+			return modifyResponse(resp, normalize, debug)
+		},
 	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -101,38 +143,23 @@ func (p *Proxy) BaseURL() string { return p.baseURL }
 func (p *Proxy) Close() error { return p.server.Close() }
 
 // injectTools adds (or augments) the request's `tools` array and defaults
-// tool_choice to "auto". Best-effort: on any decode problem the body is left
-// untouched so a normal request still goes through.
-func injectTools(req *http.Request, tools []map[string]interface{}) {
-	if req.Body == nil {
-		return
-	}
-	raw, err := io.ReadAll(req.Body)
-	req.Body.Close()
-	if err != nil {
-		req.Body = io.NopCloser(bytes.NewReader(raw))
-		return
-	}
-	var body map[string]interface{}
-	if err := json.Unmarshal(raw, &body); err != nil {
-		req.Body = io.NopCloser(bytes.NewReader(raw))
-		req.ContentLength = int64(len(raw))
-		return
-	}
+// tool_choice to "auto", leaving any caller-supplied values intact.
+func injectTools(body map[string]interface{}, tools []map[string]interface{}) {
 	if _, exists := body["tools"]; !exists {
 		body["tools"] = tools
 	}
 	if _, exists := body["tool_choice"]; !exists {
 		body["tool_choice"] = "auto"
 	}
-	setBody(req, body, raw)
 }
 
-// normalizeResponse rewrites a chat-completions JSON response so that any
-// tool call (native syntax in content, or a structured tool_calls field)
-// becomes canonical TOOL_CALL text in message.content. Non-JSON and streaming
-// responses pass through untouched.
-func normalizeResponse(resp *http.Response) error {
+// modifyResponse optionally normalizes tool-call syntax in a chat-completions
+// JSON response and/or logs it. Non-JSON and streaming responses pass through
+// untouched.
+func modifyResponse(resp *http.Response, normalize, debug bool) error {
+	if !normalize && !debug {
+		return nil
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil
 	}
@@ -153,6 +180,31 @@ func normalizeResponse(resp *http.Response) error {
 	}
 
 	changed := false
+	if normalize {
+		changed = normalizeChoices(body)
+	}
+	if debug {
+		id, _ := resp.Request.Context().Value(debugIDKey{}).(uint64)
+		logResponse(id, body)
+	}
+
+	if !changed {
+		restoreBody(resp, raw)
+		return nil
+	}
+	out, err := json.Marshal(body)
+	if err != nil {
+		restoreBody(resp, raw)
+		return nil
+	}
+	restoreBody(resp, out)
+	return nil
+}
+
+// normalizeChoices folds tool calls in every choice's message into canonical
+// TOOL_CALL text. Returns whether anything changed.
+func normalizeChoices(body map[string]interface{}) bool {
+	changed := false
 	if choices, ok := body["choices"].([]interface{}); ok {
 		for _, ch := range choices {
 			choice, ok := ch.(map[string]interface{})
@@ -168,18 +220,7 @@ func normalizeResponse(resp *http.Response) error {
 			}
 		}
 	}
-
-	if !changed {
-		restoreBody(resp, raw)
-		return nil
-	}
-	out, err := json.Marshal(body)
-	if err != nil {
-		restoreBody(resp, raw)
-		return nil
-	}
-	restoreBody(resp, out)
-	return nil
+	return changed
 }
 
 // rewriteMessage folds a structured tool_calls field and any native tool-call
@@ -202,6 +243,105 @@ func rewriteMessage(msg map[string]interface{}) bool {
 		return true
 	}
 	return false
+}
+
+// ---------------------------------------------------------------------------
+// debug logging
+// ---------------------------------------------------------------------------
+
+// debugMu serializes debug output so each request/response block stays intact
+// even when multiple workers drive the proxy concurrently.
+var debugMu sync.Mutex
+
+// logRequest prints the messages (and any tool calls) of an outgoing request.
+func logRequest(id uint64, path string, body map[string]interface{}) {
+	debugMu.Lock()
+	defer debugMu.Unlock()
+
+	fmt.Fprintf(os.Stderr, "\n========== LLM request #%d  %s ==========\n", id, path)
+	msgs, _ := body["messages"].([]interface{})
+	for _, m := range msgs {
+		msg, ok := m.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		role, _ := msg["role"].(string)
+		fmt.Fprintf(os.Stderr, "--- %s ---\n", strings.ToUpper(role))
+		if c := contentString(msg["content"]); c != "" {
+			fmt.Fprintln(os.Stderr, c)
+		}
+		if tc, ok := msg["tool_calls"].([]interface{}); ok {
+			for _, t := range tc {
+				logToolCall(t)
+			}
+		}
+	}
+}
+
+// logResponse prints the assistant message(s) of a response.
+func logResponse(id uint64, body map[string]interface{}) {
+	debugMu.Lock()
+	defer debugMu.Unlock()
+
+	fmt.Fprintf(os.Stderr, "\n---------- LLM response #%d ----------\n", id)
+	choices, _ := body["choices"].([]interface{})
+	for _, ch := range choices {
+		choice, ok := ch.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		msg, ok := choice["message"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if c := contentString(msg["content"]); c != "" {
+			fmt.Fprintln(os.Stderr, c)
+		}
+		if tc, ok := msg["tool_calls"].([]interface{}); ok {
+			for _, t := range tc {
+				logToolCall(t)
+			}
+		}
+	}
+	fmt.Fprintln(os.Stderr, strings.Repeat("=", 40))
+}
+
+func logToolCall(t interface{}) {
+	tc, ok := t.(map[string]interface{})
+	if !ok {
+		return
+	}
+	fn, ok := tc["function"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	name, _ := fn["name"].(string)
+	args, _ := fn["arguments"].(string)
+	fmt.Fprintf(os.Stderr, "→ tool_call %s(%s)\n", name, args)
+}
+
+// contentString renders an OpenAI message "content", which may be a plain
+// string or an array of typed parts, into displayable text.
+func contentString(v interface{}) string {
+	switch c := v.(type) {
+	case string:
+		return c
+	case []interface{}:
+		var b strings.Builder
+		for _, part := range c {
+			if pm, ok := part.(map[string]interface{}); ok {
+				if text, ok := pm["text"].(string); ok {
+					b.WriteString(text)
+				}
+			}
+		}
+		return b.String()
+	case nil:
+		return ""
+	default:
+		out, _ := json.Marshal(v)
+		return string(out)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -241,6 +381,27 @@ func singleJoin(a, b string) string {
 	default:
 		return strings.TrimSuffix(a, "/") + "/" + strings.TrimPrefix(b, "/")
 	}
+}
+
+// readJSONBody reads and decodes a request's JSON body. On any read/decode
+// problem it restores the body as-is and reports ok=false so the caller leaves
+// the request untouched.
+func readJSONBody(req *http.Request) (body map[string]interface{}, raw []byte, ok bool) {
+	if req.Body == nil {
+		return nil, nil, false
+	}
+	raw, err := io.ReadAll(req.Body)
+	req.Body.Close()
+	if err != nil {
+		req.Body = io.NopCloser(bytes.NewReader(raw))
+		return nil, raw, false
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		req.Body = io.NopCloser(bytes.NewReader(raw))
+		req.ContentLength = int64(len(raw))
+		return nil, raw, false
+	}
+	return body, raw, true
 }
 
 func setBody(req *http.Request, body map[string]interface{}, fallback []byte) {

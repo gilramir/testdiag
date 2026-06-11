@@ -43,6 +43,7 @@ const backgroundFile = "TEST_AGENT.md"
 type options struct {
 	Workers int
 	Output  string
+	Debug   bool
 	URL     string
 }
 
@@ -73,6 +74,10 @@ func run() error {
 		Help:     "Output directory for reports (overrides config)",
 	})
 	ap.Add(&argparse.Argument{
+		Switches: []string{"-d", "--debug"},
+		Help:     "Log the full conversation with the LLM to stderr",
+	})
+	ap.Add(&argparse.Argument{
 		Name: "url",
 		Dest: "URL",
 		Help: "Jenkins build (or test-report) URL",
@@ -91,6 +96,9 @@ func run() error {
 	if opts.Output != "" {
 		cfg.Output.Dir = opts.Output
 	}
+	if opts.Debug {
+		cfg.LLM.Debug = true
+	}
 
 	ws, err := workspace.New(cfg.Workspace.Root)
 	if err != nil {
@@ -102,12 +110,14 @@ func run() error {
 	// Register the workspace file tools once, before any agent is built.
 	toolNames := tools.Register(ws)
 
-	// Front the LLM endpoint with the tool-call normalizing proxy so models with
-	// differing native tool-call syntaxes (GPT-OSS, Gemma, Mistral, Nemotron)
-	// all work. This rewrites cfg.LLM.BaseURL to the local proxy.
-	if cfg.LLM.NormalizeToolCalls {
+	// Front the LLM endpoint with the in-process proxy so models with differing
+	// native tool-call syntaxes (GPT-OSS, Gemma, Mistral, Nemotron) all work, and
+	// so the full conversation can be logged when debugging. This rewrites
+	// cfg.LLM.BaseURL to the local proxy. Debug needs the proxy too, so start it
+	// whenever either is requested.
+	if cfg.LLM.NormalizeToolCalls || cfg.LLM.Debug {
 		var proxyTools []llmproxy.Tool
-		if cfg.LLM.InjectTools {
+		if cfg.LLM.NormalizeToolCalls && cfg.LLM.InjectTools {
 			for _, s := range tools.Schemas() {
 				proxyTools = append(proxyTools, llmproxy.Tool{
 					Name:        s.Name,
@@ -116,13 +126,18 @@ func run() error {
 				})
 			}
 		}
-		px, err := llmproxy.Start(cfg.LLM.BaseURL, proxyTools)
+		px, err := llmproxy.Start(cfg.LLM.BaseURL, llmproxy.Options{
+			Tools:     proxyTools,
+			Normalize: cfg.LLM.NormalizeToolCalls,
+			Debug:     cfg.LLM.Debug,
+		})
 		if err != nil {
-			return fmt.Errorf("starting tool-call proxy: %w", err)
+			return fmt.Errorf("starting LLM proxy: %w", err)
 		}
 		defer px.Close()
-		fmt.Printf("Tool-call normalizer active: %s -> %s (inject_tools=%t)\n",
-			px.BaseURL(), cfg.LLM.BaseURL, cfg.LLM.InjectTools)
+		fmt.Printf("LLM proxy active: %s -> %s (normalize=%t, inject_tools=%t, debug=%t)\n",
+			px.BaseURL(), cfg.LLM.BaseURL,
+			cfg.LLM.NormalizeToolCalls, cfg.LLM.InjectTools, cfg.LLM.Debug)
 		cfg.LLM.BaseURL = px.BaseURL()
 	}
 

@@ -31,8 +31,11 @@ func TestProxyRoundTrip(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	px, err := Start(upstream.URL+"/v1", []Tool{
-		{Name: "read_file", Description: "read a file", Parameters: map[string]interface{}{"type": "object"}},
+	px, err := Start(upstream.URL+"/v1", Options{
+		Tools: []Tool{
+			{Name: "read_file", Description: "read a file", Parameters: map[string]interface{}{"type": "object"}},
+		},
+		Normalize: true,
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
