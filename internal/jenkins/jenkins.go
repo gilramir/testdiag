@@ -58,7 +58,10 @@ func NewClient(user, apiToken string) *Client {
 
 // jsonAPIURL normalizes an arbitrary Jenkins URL to its JSON API endpoint by
 // stripping any trailing slash, an existing /api/json suffix, and the query
-// string, then appending /api/json with a depth that pulls in case details.
+// string. If the URL doesn't already point at a test report it appends
+// /testReport, then it appends /api/json with a depth that pulls in case
+// details. So a bare build URL (…/1234/) and a test-report URL
+// (…/1234/testReport/) both resolve to …/1234/testReport/api/json.
 func jsonAPIURL(raw string) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
@@ -69,6 +72,10 @@ func jsonAPIURL(raw string) (string, error) {
 	}
 	p := strings.TrimRight(u.Path, "/")
 	p = strings.TrimSuffix(p, "/api/json")
+	p = strings.TrimRight(p, "/")
+	if !strings.HasSuffix(p, "/testReport") {
+		p += "/testReport"
+	}
 	u.Path = p + "/api/json"
 	// depth=1 ensures suites[].cases[] (with errorStackTrace/stdout) are inlined.
 	q := url.Values{}
@@ -113,7 +120,12 @@ func (c *Client) FetchFailedTests(ctx context.Context, buildURL string) ([]Faile
 		return nil, fmt.Errorf("decoding test report from %s: %w", apiURL, err)
 	}
 
-	reportBase := strings.TrimSuffix(strings.TrimRight(buildURL, "/"), "/api/json")
+	// reportBase is the build URL with any /api/json or /testReport suffix
+	// stripped, so caseReportURL can re-append testReport/<case> without doubling.
+	reportBase := strings.TrimRight(buildURL, "/")
+	reportBase = strings.TrimSuffix(reportBase, "/api/json")
+	reportBase = strings.TrimRight(reportBase, "/")
+	reportBase = strings.TrimSuffix(reportBase, "/testReport")
 
 	var failures []FailedTest
 	for _, suite := range report.Suites {
