@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -23,8 +24,10 @@ import (
 // root, so the jailed file tools can read them.
 const logDir = ".testdiag/logs"
 
-// maxToolIterations caps the native tool-calling loop per test.
-const maxToolIterations = 20
+// maxToolIterations caps the native tool-calling loop per test. It is generous
+// because a flaky failure often requires tracing across the Python client / C++
+// server boundary, which takes many reads.
+const maxToolIterations = 30
 
 // Result is the outcome of diagnosing one test.
 type Result struct {
@@ -69,11 +72,36 @@ func (d *Diagnoser) Diagnose(ctx context.Context, test jenkins.FailedTest) (Resu
 	}
 
 	excerpt := makeExcerpt(combinedLog(test))
-	prompt := buildUserPrompt(test, m, logRel, excerpt, d.background)
+	basePrompt := buildUserPrompt(test, m, logRel, excerpt, d.background)
 
-	res, err := agent.Run(ctx, prompt)
-	if err != nil {
-		return Result{}, fmt.Errorf("agent run for %s: %w", test.FullName(), err)
+	// Critique/revise loop: run the agent, and if the draft looks shallow (didn't
+	// open source, or never names a flakiness mechanism) re-run it with the gaps
+	// fed back, up to MaxAttempts. Each run is independent (memory disabled), so
+	// the retry prompt carries the prior draft and the full task forward.
+	attempts := d.cfg.Diagnosis.MaxAttempts
+	if attempts < 1 {
+		attempts = 1
+	}
+	prompt := basePrompt
+	var (
+		res         *vnext.Result
+		toolsCalled []string
+	)
+	for attempt := 1; attempt <= attempts; attempt++ {
+		r, err := agent.Run(ctx, prompt)
+		if err != nil {
+			return Result{}, fmt.Errorf("agent run for %s: %w", test.FullName(), err)
+		}
+		res = r
+		toolsCalled = append(toolsCalled, r.ToolsCalled...)
+
+		issues := critique(r, logRel)
+		if len(issues) == 0 || attempt == attempts {
+			break
+		}
+		fmt.Fprintf(os.Stderr, "  ↻ %s: attempt %d was shallow, re-diagnosing (%s)\n",
+			test.FullName(), attempt, strings.Join(issues, "; "))
+		prompt = buildRetryPrompt(basePrompt, r.Content, issues)
 	}
 
 	return Result{
@@ -81,9 +109,100 @@ func (d *Diagnoser) Diagnose(ctx context.Context, test jenkins.FailedTest) (Resu
 		Mapping:     m,
 		LogPath:     logRel,
 		RootCause:   res.Content,
-		ToolsCalled: res.ToolsCalled,
+		ToolsCalled: toolsCalled,
 		Duration:    time.Since(start),
 	}, nil
+}
+
+// minToolCalls is the fewest tool calls below which we assume the agent barely
+// looked at the system before concluding.
+const minToolCalls = 3
+
+// critique returns the reasons a diagnosis looks shallow, or nil if it passes.
+// It is a cheap, conservative gate for the revise loop: it only flags answers
+// that clearly didn't do the work, so a genuinely thorough first attempt is
+// accepted without a second (costly) run.
+func critique(res *vnext.Result, logPath string) []string {
+	var issues []string
+
+	// Did the agent explore source beyond the saved failure log? ToolCalls
+	// carries the arguments; fall back to ToolsCalled (names only) if it's empty.
+	total := len(res.ToolCalls)
+	sourceReads := 0
+	for _, c := range res.ToolCalls {
+		if p := toolArgPath(c.Arguments); p != "" && p != logPath {
+			sourceReads++
+		}
+	}
+	if total == 0 {
+		total = len(res.ToolsCalled)
+	}
+	if total < minToolCalls {
+		issues = append(issues, fmt.Sprintf("only %d tool call(s) were made — the system was barely explored", total))
+	}
+	if len(res.ToolCalls) > 0 && sourceReads == 0 {
+		issues = append(issues, "no source files were opened (only the failure log was read) — read the actual client and server code")
+	}
+
+	content := strings.ToLower(res.Content)
+	if !mentionsMechanism(content) {
+		issues = append(issues, "the report names no nondeterminism mechanism (race / timing / ordering / resource / environment) — flaky failures need one")
+	}
+	if !hasFileCitation(res.Content) {
+		issues = append(issues, "the report cites no concrete source file as evidence")
+	}
+	return issues
+}
+
+// mechanismTerms are words that signal the report engaged with WHY a test is
+// flaky rather than just what it does.
+var mechanismTerms = []string{
+	"race", "concurren", "thread", "lock", "mutex", "atomic", "deadlock",
+	"timing", "timeout", "deadline", "sleep", "wait", "poll", "async",
+	"order", "schedul", "nondetermin", "intermitt", "retry", "backoff",
+	"resource", "port", "leak", "limit", "environment", "leftover", "seed",
+	"replication", "quorum", "partition", "startup", "ready",
+}
+
+func mentionsMechanism(lowerContent string) bool {
+	for _, t := range mechanismTerms {
+		if strings.Contains(lowerContent, t) {
+			return true
+		}
+	}
+	return false
+}
+
+// sourceFileRe matches a workspace-relative source path with a recognizable
+// extension (Python/C++ and common glue), used to confirm the report cites
+// actual code rather than just prose.
+var sourceFileRe = regexp.MustCompile(`[\w./-]+\.(py|pyx|cc|cpp|cxx|c|h|hh|hpp|hxx|proto|go|java|rs)\b`)
+
+func hasFileCitation(content string) bool {
+	return sourceFileRe.MatchString(content)
+}
+
+// toolArgPath extracts a single file path from a tool call's arguments, handling
+// both the "path" argument (read_lines/grep/read_file/list_directory) and the
+// "paths" list (count_lines).
+func toolArgPath(args map[string]interface{}) string {
+	if args == nil {
+		return ""
+	}
+	if p, ok := args["path"].(string); ok {
+		return p
+	}
+	switch ps := args["paths"].(type) {
+	case string:
+		return ps
+	case []interface{}:
+		if len(ps) > 0 {
+			if s, ok := ps[0].(string); ok {
+				return s
+			}
+		}
+	}
+	return ""
 }
 
 // buildAgent constructs a fresh agent for one test. Memory is disabled so each

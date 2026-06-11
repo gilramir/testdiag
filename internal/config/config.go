@@ -20,6 +20,7 @@ type Config struct {
 	LLM       LLM       `toml:"llm"`
 	Workspace Workspace `toml:"workspace"`
 	Output    Output    `toml:"output"`
+	Diagnosis Diagnosis `toml:"diagnosis"`
 }
 
 // Jenkins holds credentials for talking to the Jenkins HTTP API. Jenkins uses
@@ -60,6 +61,16 @@ type Workspace struct {
 	// against. If empty, the current working directory is used. TEST_AGENT.md
 	// is expected at the root of this directory.
 	Root string `toml:"root"`
+}
+
+// Diagnosis tunes the per-test agent loop.
+type Diagnosis struct {
+	// MaxAttempts is the total number of agent attempts per test, including the
+	// first. When >1, a critique/revise feedback loop re-runs the agent with the
+	// previous draft and the specific gaps fed back, whenever an attempt looks
+	// shallow (didn't explore source / didn't identify a flakiness mechanism).
+	// A value of 1 disables the loop.
+	MaxAttempts int `toml:"max_attempts"`
 }
 
 // Output controls how diagnosis reports are written.
@@ -121,6 +132,9 @@ func defaults() *Config {
 			Dir:     "test-diagnosis",
 			Workers: 4,
 		},
+		Diagnosis: Diagnosis{
+			MaxAttempts: 2,
+		},
 	}
 }
 
@@ -143,6 +157,8 @@ func applyEnvOverrides(cfg *Config) {
 
 	setStr(&cfg.Output.Dir, "TESTDIAG_OUTPUT_DIR")
 	setInt(&cfg.Output.Workers, "TESTDIAG_WORKERS")
+
+	setInt(&cfg.Diagnosis.MaxAttempts, "TESTDIAG_MAX_ATTEMPTS")
 }
 
 func (c *Config) validate() error {
@@ -154,6 +170,9 @@ func (c *Config) validate() error {
 	}
 	if c.Output.Workers < 1 {
 		c.Output.Workers = 1
+	}
+	if c.Diagnosis.MaxAttempts < 1 {
+		c.Diagnosis.MaxAttempts = 1
 	}
 	return nil
 }

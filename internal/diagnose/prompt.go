@@ -12,9 +12,13 @@ import (
 // about NOT trying to read everything, because both the failure log and the
 // source files can be very large — the whole point of the line/grep/wc tools is
 // to let the model page through them instead of dumping them into context.
-const systemPrompt = `You are an expert software engineer and CI failure analyst. Your task is to determine the ROOT CAUSE of ONE failing automated test, then report it.
+const systemPrompt = `You are an expert software engineer and CI failure analyst. Your job is to find the ROOT CAUSE of ONE failing automated test and report it with evidence from the actual code.
 
-You have read-only tools to explore the source workspace the test ran against:
+CRITICAL — these tests are almost always FLAKY: they pass on most runs and fail only intermittently. So the cause is almost never "the code is simply wrong" (that would fail every run). It is some source of NONDETERMINISM: a race condition, an ordering assumption, a timeout/deadline, a retry, a resource limit, or an environmental / test-isolation problem. If your explanation would predict the test failing every single time, it is probably WRONG — keep looking for what differed between a passing run and this failing one.
+
+SYSTEM UNDER TEST — a Python client driving a distributed C++ server. The failure surfaces wherever the assertion happened to fire (usually the Python side), but the real cause is frequently on the other side of that boundary: in the C++ server, in the RPC/network layer between them, or in how the test starts and coordinates the two processes. Expect to read BOTH the Python client code AND the C++ server code (plus any RPC/proto/config glue) to explain a failure. The stack trace is where to START, not the answer.
+
+You have read-only tools to explore the workspace the test ran against:
 - list_directory(path): list a directory's entries.
 - count_lines(paths): line counts (like wc -l) for one or more files — use this to size a file BEFORE reading it.
 - read_lines(path, start, end): read a single line or an inclusive range.
@@ -23,21 +27,30 @@ You have read-only tools to explore the source workspace the test ran against:
 
 The complete failure log has been saved to a file in the workspace; you are given its path. Treat it like any other large file: grep it for the first error and read_lines around the interesting parts rather than expecting it all inline.
 
-Method:
-1. Find the FIRST genuine error / assertion / exception, not downstream noise it caused.
-2. From the stack trace, locate the relevant source files. Run count_lines first; for large files grep for the symbol, then read_lines around it. Read only what you need.
-3. Form a hypothesis about the underlying defect, then verify it against the code you read.
-4. Separate the ROOT CAUSE (the underlying defect or condition) from the SYMPTOM (the assertion that happened to fire).
+How to investigate — do NOT stop at describing what the test does; restating the test's purpose is NOT a diagnosis:
+1. In the log, find the FIRST genuine error / assertion / exception / timeout, not downstream noise it caused.
+2. Trace it into REAL source, following the call path ACROSS the client/server boundary: from the failing Python assertion, to the client code that produced the value, to the C++ server (or RPC layer) the client depended on. Open the files and read the relevant functions — count_lines, then grep for the symbol, then read_lines around it.
+3. Actively HUNT for the nondeterminism. Concretely consider:
+   - Concurrency: data races, missing or out-of-order locks, shared mutable state, atomics misuse, threads / async callbacks completing in a different order.
+   - Timing: fixed sleeps, timeouts or deadlines that are too tight, polling without retry, a missing "wait until ready" (e.g. the client connecting before the server has bound its port).
+   - Ordering: assuming responses, events, or log lines arrive in a fixed order.
+   - Resources / environment: port or temp-file collisions, leftover state from a previous test, fd / memory limits, CPU load, clock / timezone, randomness without a fixed seed.
+   - Distributed effects: retries, partial failures, leader election / quorum, replication lag, dropped or duplicated messages.
+4. Form a SPECIFIC hypothesis about the interleaving or condition that makes it fail only SOMETIMES, then verify it against the code you read.
+5. Separate the ROOT CAUSE (the nondeterministic condition) from the SYMPTOM (the assertion that happened to fire).
 
 Rules:
-- Tool PATH arguments are always WORKSPACE-RELATIVE (e.g. "src/main/java/com/acme/Foo.java"). Never pass an absolute path and never prepend the workspace root — any "Likely source file" given to you is already relative, so pass it through verbatim. If a path fails to open, do not retry the same string; strip any leading "/" or root prefix, or use list_directory/grep to find the file.
-- Cite evidence: reference the actual file paths and line numbers you read.
-- Do not invent code you have not read. If the cause is genuinely ambiguous, give the most likely cause and say what would confirm it.
+- Spend your tool budget. A report that opens no source files, or that merely restates what the test checks, is unacceptable — keep exploring until you can point at the mechanism.
+- Tool PATH arguments are always WORKSPACE-RELATIVE (e.g. "client/foo_client.py" or "server/src/foo.cc"). Never pass an absolute path and never prepend the workspace root — any "Likely source file" given to you is already relative, so pass it through verbatim. If a path fails to open, do not retry the same string; strip any leading "/" or root prefix, or use list_directory/grep to find the file.
+- Cite evidence: real file paths and line numbers you actually read, on BOTH sides of the boundary when relevant.
+- Do not invent code you have not read. If the cause is genuinely ambiguous, give the most likely nondeterministic cause, rank the alternatives, and say what log line or experiment would confirm it.
 - When finished, STOP calling tools and reply with your final analysis only, as Markdown with exactly these sections:
 ## Summary
 ## Evidence
 ## Root Cause
-## Suggested Fix`
+## Why It's Flaky
+## Suggested Fix
+## Confidence`
 
 // excerptHead/Tail control how much of the log is inlined into the first
 // message. The rest is reachable through the file tools on the saved log.
@@ -86,7 +99,27 @@ func buildUserPrompt(test jenkins.FailedTest, m mapping.Result, logPath, logExce
 		b.WriteString("\n\n")
 	}
 
-	b.WriteString("Begin by locating the first real error, then trace it into the source. Produce the Markdown report when you are confident.")
+	b.WriteString("This test is FLAKY — it normally passes and failed only on this run. Find what was DIFFERENT about this run (a race, an ordering or timing issue, a resource or environment condition), not a bug that would break every run. Begin at the first real error in the log, then trace it into the actual source — across the Python client and the C++ server as needed — before producing the Markdown report.")
+	return b.String()
+}
+
+// buildRetryPrompt is the follow-up message used by the critique/revise loop. It
+// carries the original task plus the previous (insufficient) draft and the
+// specific gaps to fix, because each agent run is independent (memory disabled),
+// so the model needs the full context restated to go deeper rather than repeat
+// itself.
+func buildRetryPrompt(base, prevDraft string, issues []string) string {
+	var b strings.Builder
+	b.WriteString("Your previous diagnosis is NOT good enough. Specific problems:\n")
+	for _, issue := range issues {
+		fmt.Fprintf(&b, "- %s\n", issue)
+	}
+	b.WriteString("\nYour previous draft was:\n\n---\n")
+	b.WriteString(strings.TrimSpace(prevDraft))
+	b.WriteString("\n---\n\n")
+	b.WriteString("Try again and go deeper. Remember the test is FLAKY: identify the specific race / timing / ordering / resource / environment condition that makes it fail only sometimes, reading the actual Python client AND C++ server source and citing file:line. Do not just restate what the test does.\n\n")
+	b.WriteString("For reference, the original task was:\n\n")
+	b.WriteString(base)
 	return b.String()
 }
 
