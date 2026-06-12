@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	vnext "github.com/agenticgokit/agenticgokit/v1beta"
 
@@ -42,7 +43,7 @@ type searchRepoTool struct{ ws *workspace.Workspace }
 
 func (t *searchRepoTool) Name() string { return "search_repo" }
 func (t *searchRepoTool) Description() string {
-	return "Recursively search the workspace tree for a regular-expression pattern and return matching lines as path:line: text. Use this to locate a symbol, an error string from the log, or a test's source file across the whole project. Skips VCS, dependency, and build directories and binary files."
+	return "Recursively search the workspace tree for a regular-expression pattern and return matching lines as path:line: text. Use this to locate a symbol, an error string from the log, or a test's source file across the whole project. This crawls the WHOLE tree and can be slow, so prefer narrower lookups first: if you already know a symbol is imported, follow its import to the defining file and grep that file instead; and when you must search, pass an 'include' glob (e.g. '*.py') and search for the definition (e.g. 'def name'/'class name') rather than every use. Skips VCS, dependency, and build directories and binary files."
 }
 func (t *searchRepoTool) JSONSchema() map[string]interface{} {
 	return map[string]interface{}{
@@ -78,6 +79,10 @@ func (t *searchRepoTool) Execute(ctx context.Context, args map[string]interface{
 		return fail("search_repo: %v", err)
 	}
 	include, hasInclude := strArg(args, "include")
+
+	vlogf("search_repo start: pattern=%q path=%q include=%q ignore_case=%t",
+		pattern, base, include, boolArg(args, "ignore_case"))
+	start := time.Now()
 
 	var matches []map[string]interface{}
 	filesScanned := 0
@@ -134,6 +139,9 @@ func (t *searchRepoTool) Execute(ctx context.Context, args map[string]interface{
 		return fail("search_repo: %v", ctx.Err())
 	}
 
+	vlogf("search_repo done: %d match(es) across %d file(s) in %s (truncated=%t)",
+		len(matches), filesScanned, time.Since(start).Round(time.Millisecond), truncated)
+
 	return ok(map[string]interface{}{
 		"matches":   matches,
 		"count":     len(matches),
@@ -177,6 +185,9 @@ func (t *findFilesTool) Execute(ctx context.Context, args map[string]interface{}
 	}
 	ci := boolArg(args, "ignore_case")
 
+	vlogf("find_files start: pattern=%q path=%q ignore_case=%t", pattern, base, ci)
+	start := time.Now()
+
 	var paths []string
 	filesScanned := 0
 	truncated := false
@@ -213,6 +224,9 @@ func (t *findFilesTool) Execute(ctx context.Context, args map[string]interface{}
 		return fail("find_files: %v", ctx.Err())
 	}
 	sort.Strings(paths)
+
+	vlogf("find_files done: %d path(s) across %d file(s) in %s (truncated=%t)",
+		len(paths), filesScanned, time.Since(start).Round(time.Millisecond), truncated)
 
 	return ok(map[string]interface{}{
 		"paths":     paths,

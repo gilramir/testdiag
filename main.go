@@ -45,6 +45,7 @@ type options struct {
 	Workers int
 	Output  string
 	Debug   bool
+	Verbose bool
 	URL     string
 	Filters []string
 }
@@ -79,6 +80,10 @@ func run() error {
 	ap.Add(&argparse.Argument{
 		Switches: []string{"-d", "--debug"},
 		Help:     "Log the full conversation with the LLM to stderr",
+	})
+	ap.Add(&argparse.Argument{
+		Switches: []string{"-v", "--verbose"},
+		Help:     "Log tool progress (e.g. when a whole-repo search_repo/find_files starts and finishes) to stderr",
 	})
 	ap.Add(&argparse.Argument{
 		Name: "url",
@@ -119,6 +124,7 @@ func run() error {
 	background := readBackground(ws.Root())
 
 	// Register the workspace file tools once, before any agent is built.
+	tools.SetVerbose(opts.Verbose)
 	toolNames := tools.Register(ws)
 
 	// Front the LLM endpoint with the in-process proxy so models with differing

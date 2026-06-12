@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	vnext "github.com/agenticgokit/agenticgokit/v1beta"
 
@@ -45,6 +46,23 @@ func toolDefs(ws *workspace.Workspace) []vnext.Tool {
 		&gitLogTool{ws: ws},
 		&readLogTool{ws: ws},
 		&grepLogTool{ws: ws},
+	}
+}
+
+// verbose toggles progress logging for the long-running tree-walking tools
+// (search_repo, find_files) so the operator can see when a slow whole-repo crawl
+// starts and finishes. It is a process-global because the tools are shared,
+// stateless singletons (see Register); set it once at startup.
+var verbose atomic.Bool
+
+// SetVerbose enables or disables the per-tool progress logging emitted to stderr.
+func SetVerbose(v bool) { verbose.Store(v) }
+
+// vlogf writes a tool progress line to stderr when verbose mode is on. Each call
+// is a single Fprintf, so concurrent workers interleave by whole lines.
+func vlogf(format string, args ...interface{}) {
+	if verbose.Load() {
+		fmt.Fprintf(os.Stderr, "[tool] "+format+"\n", args...)
 	}
 }
 
