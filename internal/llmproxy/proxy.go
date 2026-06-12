@@ -98,8 +98,9 @@ func Start(upstreamBaseURL string, opts Options) (*Proxy, error) {
 			// Ask for an unencoded body so ModifyResponse can rewrite it.
 			req.Header.Set("Accept-Encoding", "identity")
 
-			inject := isChatCompletions(reqPath) && len(openAITools) > 0
-			if !inject && !debug {
+			isChat := isChatCompletions(reqPath)
+			inject := isChat && len(openAITools) > 0
+			if !isChat && !debug {
 				return
 			}
 			body, raw, ok := readJSONBody(req)
@@ -108,6 +109,9 @@ func Start(upstreamBaseURL string, opts Options) (*Proxy, error) {
 			}
 			if inject {
 				injectTools(body, openAITools)
+			}
+			if isChat {
+				scrubContinuationNudge(body)
 			}
 			if debug {
 				id := reqCounter.Add(1)
@@ -151,6 +155,63 @@ func injectTools(body map[string]interface{}, tools []map[string]interface{}) {
 	if _, exists := body["tool_choice"]; !exists {
 		body["tool_choice"] = "auto"
 	}
+}
+
+// agkContinuationNudge is the verbatim instruction AgenticGoKit (v0.5.x) appends
+// to the user message of its post-tool continuation prompt
+// (v1beta/agent_impl.go). It pressures the model to stop calling tools, which
+// cuts our multi-step diagnosis short before the agent has read enough source.
+// The framework offers no way to disable it, so the proxy rewrites it on the way
+// out — see scrubContinuationNudge.
+const agkContinuationNudge = "provide a final answer. Do NOT make additional tool calls unless absolutely necessary."
+
+// agkContinuationReplacement is the permissive instruction we substitute, telling
+// the agent to keep investigating until it has the root cause.
+const agkContinuationReplacement = "keep investigating: call more tools whenever you need more evidence, and give your final answer only once you have found the root cause."
+
+// scrubContinuationNudge replaces AgenticGoKit's "stop calling tools" nudge in
+// every message's content with a permissive instruction. Returns whether it
+// changed anything. Content may be a plain string or an array of typed parts.
+func scrubContinuationNudge(body map[string]interface{}) bool {
+	msgs, ok := body["messages"].([]interface{})
+	if !ok {
+		return false
+	}
+	changed := false
+	for _, m := range msgs {
+		msg, ok := m.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		switch c := msg["content"].(type) {
+		case string:
+			if out, ok := stripNudge(c); ok {
+				msg["content"] = out
+				changed = true
+			}
+		case []interface{}:
+			for _, part := range c {
+				pm, ok := part.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				if text, ok := pm["text"].(string); ok {
+					if out, ok := stripNudge(text); ok {
+						pm["text"] = out
+						changed = true
+					}
+				}
+			}
+		}
+	}
+	return changed
+}
+
+func stripNudge(s string) (string, bool) {
+	if !strings.Contains(s, agkContinuationNudge) {
+		return s, false
+	}
+	return strings.ReplaceAll(s, agkContinuationNudge, agkContinuationReplacement), true
 }
 
 // modifyResponse optionally normalizes tool-call syntax in a chat-completions

@@ -73,3 +73,47 @@ func TestProxyRoundTrip(t *testing.T) {
 		t.Errorf("response content not normalized: %q", content)
 	}
 }
+
+// TestScrubContinuationNudge verifies the proxy rewrites AgenticGoKit's
+// "Do NOT make additional tool calls" nudge out of an outgoing request so it
+// never reaches the model.
+func TestScrubContinuationNudge(t *testing.T) {
+	var gotContent string
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]interface{}
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &body)
+		msgs, _ := body["messages"].([]interface{})
+		if len(msgs) > 0 {
+			if m, ok := msgs[0].(map[string]interface{}); ok {
+				gotContent, _ = m["content"].(string)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
+	}))
+	defer upstream.Close()
+
+	px, err := Start(upstream.URL+"/v1", Options{})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer px.Close()
+
+	reqBody := `{"model":"m","messages":[{"role":"user","content":` +
+		`"Tool execution results:\nfoo\n\nBased on these tool results, ` +
+		`provide a final answer. Do NOT make additional tool calls unless absolutely necessary."}]}`
+	resp, err := http.Post(px.BaseURL()+"/chat/completions", "application/json", strings.NewReader(reqBody))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	resp.Body.Close()
+
+	if strings.Contains(gotContent, "Do NOT make additional tool calls") {
+		t.Errorf("nudge reached upstream: %q", gotContent)
+	}
+	if !strings.Contains(gotContent, "keep investigating") {
+		t.Errorf("replacement not applied: %q", gotContent)
+	}
+}
