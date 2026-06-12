@@ -63,16 +63,24 @@ a time → write a report each.
   match/entry/file counts) to protect the context window. One exception to the
   read-only rule: `run_script` writes and executes a shell/Python script in the
   workspace root, but only after the operator approves the exact script at a
-  `1 = Yes / 2 = No` prompt; a decline runs nothing. Every call goes through a
-  `loggingTool` wrapper that also guards against loops: if the model makes the
-  exact same `(tool, args)` call `loopThreshold` times in one run, the call is
-  intercepted and replaced with a nudge to try a different approach instead of
-  re-executing. `diagnose` calls `tools.ResetLoopGuard()` before each agent run
-  to scope detection to a single attempt.
+  `1 = Yes / 2 = No` prompt; a decline runs nothing. The other writer is
+  `notebook` (`append`/`read`): a per-test Markdown scratchpad the agent uses as
+  working memory — it records what it's looking for and why, and re-reads to
+  refresh. Its path is NOT a model argument; it's a fixed `.testdiag/notes/<test>.md`
+  set per test via `tools.SetNotebookPath`, so the model can't write anywhere
+  else. Every call goes through a `loggingTool` wrapper that also guards against
+  loops: if the model makes the exact same `(tool, args)` call `loopThreshold`
+  times in one run, the call is intercepted and replaced with a nudge to try a
+  different approach instead of re-executing. `diagnose` calls
+  `tools.ResetLoopGuard()` before each agent run to scope detection to a single
+  attempt. Tools that opt out via the `loopExempt` marker (the `notebook`, whose
+  re-reads legitimately change as notes accumulate) are never guarded.
 - **`internal/diagnose`** — the core. `Diagnoser.Diagnose` maps the test, saves
   the full failure log under `<workspace>/.testdiag/logs/` (so the jailed tools
-  can read it), builds a **fresh agent per test** (memory disabled, reasoning
-  loop enabled, capped at `maxToolIterations`), and runs it. `prompt.go` holds
+  can read it), starts a fresh per-test notebook under `.testdiag/notes/` and
+  points the `notebook` tool at it, builds a **fresh agent per test** (memory
+  disabled, reasoning loop enabled, capped at `maxToolIterations`), and runs it.
+  Disk is the only working memory carried across the agent's tool loop. `prompt.go` holds
   the system prompt and assembles the first user message with a head+tail log
   excerpt (full log reachable via the tools).
 - **`internal/mapping`** — **STUB.** `MapTestToSource` returns an empty path; the

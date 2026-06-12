@@ -368,3 +368,85 @@ func TestResetLoopGuard(t *testing.T) {
 		t.Error("ResetLoopGuard did not clear the call history")
 	}
 }
+
+func TestNotebookAppendAndRead(t *testing.T) {
+	ws, _ := setupWS(t)
+	SetNotebookPath(".testdiag/notes/test.md")
+	t.Cleanup(func() { SetNotebookPath("") })
+
+	tool := &notebookTool{ws: ws}
+
+	// Empty before anything is written.
+	res, err := tool.Execute(context.Background(), map[string]interface{}{"action": "read"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Content.(map[string]interface{})["empty"] != true {
+		t.Fatal("fresh notebook should read as empty")
+	}
+
+	// Append two notes.
+	for _, note := range []string{"Looking for a race in connect()", "Ruled out: timeout — value is 30s"} {
+		res, err = tool.Execute(context.Background(), map[string]interface{}{"action": "append", "note": note})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Content.(map[string]interface{})["appended"] != true {
+			t.Fatalf("append of %q did not report success", note)
+		}
+	}
+
+	// Read them back.
+	res, err = tool.Execute(context.Background(), map[string]interface{}{"action": "read"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := res.Content.(map[string]interface{})["content"].(string)
+	if !strings.Contains(content, "race in connect()") || !strings.Contains(content, "Ruled out: timeout") {
+		t.Fatalf("notebook did not retain both notes:\n%s", content)
+	}
+}
+
+func TestNotebookRequiresNote(t *testing.T) {
+	ws, _ := setupWS(t)
+	SetNotebookPath(".testdiag/notes/test.md")
+	t.Cleanup(func() { SetNotebookPath("") })
+
+	tool := &notebookTool{ws: ws}
+	res, _ := tool.Execute(context.Background(), map[string]interface{}{"action": "append"})
+	if res.Success {
+		t.Fatal("append without a note should fail")
+	}
+}
+
+func TestNotebookDisabledWhenUnset(t *testing.T) {
+	ws, _ := setupWS(t)
+	SetNotebookPath("")
+
+	tool := &notebookTool{ws: ws}
+	res, _ := tool.Execute(context.Background(), map[string]interface{}{"action": "read"})
+	if res.Success {
+		t.Fatal("notebook should be unavailable when no path is set")
+	}
+}
+
+func TestNotebookExemptFromLoopGuard(t *testing.T) {
+	ws, _ := setupWS(t)
+	SetNotebookPath(".testdiag/notes/test.md")
+	ResetLoopGuard()
+	t.Cleanup(func() { SetNotebookPath(""); ResetLoopGuard() })
+
+	tool := &loggingTool{inner: &notebookTool{ws: ws}}
+	args := map[string]interface{}{"action": "read"}
+	// Far more identical reads than loopThreshold: the notebook must never be
+	// intercepted with a loop nudge.
+	for i := 0; i < loopThreshold+3; i++ {
+		res, err := tool.Execute(context.Background(), args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, looped := res.Content.(map[string]interface{})["loop_detected"]; looped {
+			t.Fatalf("notebook read %d was wrongly treated as a loop", i+1)
+		}
+	}
+}

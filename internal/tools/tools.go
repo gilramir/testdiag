@@ -49,6 +49,7 @@ func toolDefs(ws *workspace.Workspace) []vnext.Tool {
 		&readLogTool{ws: ws},
 		&grepLogTool{ws: ws},
 		&runScriptTool{ws: ws},
+		&notebookTool{ws: ws},
 	}
 }
 
@@ -101,6 +102,11 @@ type loopGuard struct {
 }
 
 var guard = &loopGuard{counts: map[string]int{}}
+
+// loopExempt is implemented by tools whose repeated identical calls are
+// legitimate (e.g. the notebook, whose re-reads return more as the agent appends
+// to it) and so must never be intercepted by the loop guard.
+type loopExempt interface{ loopExempt() }
 
 // ResetLoopGuard clears the repeated-call history. Call it at the start of each
 // agent run so loop detection is scoped to a single diagnosis attempt and never
@@ -172,9 +178,12 @@ func (t *loggingTool) Execute(ctx context.Context, args map[string]interface{}) 
 
 	// Break repeated-call loops before doing any work: if the model has asked for
 	// the exact same thing too many times, redirect it instead of re-running.
-	if n := guard.record(fingerprint(name, args)); n >= loopThreshold {
-		vlogf("%s loop detected (%d× identical) — nudging model to change approach", name, n)
-		return loopNudge(name, n), nil
+	// Tools that opt out (the notebook) are never guarded.
+	if _, exempt := t.inner.(loopExempt); !exempt {
+		if n := guard.record(fingerprint(name, args)); n >= loopThreshold {
+			vlogf("%s loop detected (%d× identical) — nudging model to change approach", name, n)
+			return loopNudge(name, n), nil
+		}
 	}
 
 	if !verbose.Load() {

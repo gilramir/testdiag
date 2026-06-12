@@ -25,6 +25,10 @@ import (
 // root, so the jailed file tools can read them.
 const logDir = ".testdiag/logs"
 
+// notebookDir is where each test's investigation notebook lives, relative to the
+// workspace root, so the notebook tool (jailed like the rest) can read/write it.
+const notebookDir = ".testdiag/notes"
+
 // maxToolIterations caps the native tool-calling loop per test. It is generous
 // because a flaky failure often requires tracing across the Python client / C++
 // server boundary, which takes many reads.
@@ -65,6 +69,12 @@ func (d *Diagnoser) Diagnose(ctx context.Context, test jenkins.FailedTest) (Resu
 	logRel, err := d.saveLog(test)
 	if err != nil {
 		return Result{}, fmt.Errorf("saving log for %s: %w", test.FullName(), err)
+	}
+
+	// Give the agent a fresh per-test notebook to record what it's looking for
+	// and why, and point the notebook tool at it for the duration of this test.
+	if _, err := d.prepareNotebook(test); err != nil {
+		return Result{}, fmt.Errorf("preparing notebook for %s: %w", test.FullName(), err)
 	}
 
 	agent, err := d.buildAgent(test)
@@ -255,6 +265,25 @@ func (d *Diagnoser) saveLog(test jenkins.FailedTest) (string, error) {
 		return "", err
 	}
 	return filepath.ToSlash(rel), nil
+}
+
+// prepareNotebook starts a fresh investigation notebook for the test (replacing
+// any stale one from a previous run) and points the notebook tool at it. The
+// agent appends to and re-reads this file through the tool to keep its bearings.
+func (d *Diagnoser) prepareNotebook(test jenkins.FailedTest) (string, error) {
+	dir := filepath.Join(d.ws.Root(), notebookDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	rel := filepath.Join(notebookDir, sanitize(test.FullName())+".md")
+	abs := filepath.Join(d.ws.Root(), rel)
+	header := fmt.Sprintf("# Investigation notebook: %s\n\n", test.FullName())
+	if err := os.WriteFile(abs, []byte(header), 0o644); err != nil {
+		return "", err
+	}
+	relSlash := filepath.ToSlash(rel)
+	tools.SetNotebookPath(relSlash)
+	return relSlash, nil
 }
 
 // combinedLog assembles the full failure output the way a developer would see
