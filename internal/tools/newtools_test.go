@@ -135,6 +135,32 @@ func TestFindFiles(t *testing.T) {
 	}
 }
 
+func TestFindFilesRefusesLogHuntWhenWithheld(t *testing.T) {
+	ws, _ := setupWS(t)
+	tool := &findFilesTool{ws: ws}
+
+	// With logs withheld (DEEPINSPECT), a lookup naming a log file is refused.
+	SetLogToolsEnabled(false)
+	defer SetLogToolsEnabled(true)
+	for _, q := range []string{"failure.log", "log.txt", "*.log"} {
+		res, err := tool.Execute(context.Background(), map[string]interface{}{"pattern": q})
+		if err == nil || (res != nil && res.Success) {
+			t.Errorf("expected refusal for log-hunt pattern %q", q)
+		}
+	}
+
+	// A legitimate source lookup is NOT refused even when logs are withheld.
+	if res, err := tool.Execute(context.Background(), map[string]interface{}{"pattern": "*_client.py"}); err != nil || !res.Success {
+		t.Errorf("source lookup should succeed when logs withheld: %v", err)
+	}
+
+	// When logs are NOT withheld, the guard is inactive.
+	SetLogToolsEnabled(true)
+	if res, err := tool.Execute(context.Background(), map[string]interface{}{"pattern": "*.log"}); err != nil || !res.Success {
+		t.Errorf("log-named lookup should run when logs not withheld: %v", err)
+	}
+}
+
 func TestReadLogTail(t *testing.T) {
 	ws, _ := setupWS(t)
 	tool := &readLogTool{ws: ws}

@@ -197,6 +197,15 @@ func (t *findFilesTool) Execute(ctx context.Context, args map[string]interface{}
 	if !has {
 		return fail("find_files: 'pattern' is required")
 	}
+	// When the raw log is withheld (DEEPINSPECT), refuse a lookup that is clearly
+	// hunting for a log file (e.g. "failure.log", "log.txt", "*.log"): there is no
+	// failure log in the workspace — it was consumed by the earlier stage and
+	// everything from it is in the investigation brief.
+	if !logToolsEnabled.Load() {
+		if q := logHuntQuery(args); q != "" {
+			return fail("find_files: %q looks like an attempt to find a log file. There is no failure log in the workspace — it was consumed by the earlier stage and everything relevant is already in the investigation brief. Do NOT look for logs; go straight to the SOURCE files the brief names.", q)
+		}
+	}
 	base := "."
 	if p, ok := strArg(args, "path"); ok {
 		base = p
