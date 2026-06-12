@@ -44,6 +44,9 @@ func (s *logParseStage) Run(ctx context.Context, sc *Context) error {
 	if err != nil {
 		return fmt.Errorf("agent run: %w", err)
 	}
+	if strings.TrimSpace(r.Content) == "" {
+		return fmt.Errorf("agent returned empty brief for %s", sc.Test.FullName())
+	}
 	rel, err := s.writeBrief(sc.Test, r.Content)
 	if err != nil {
 		return err
