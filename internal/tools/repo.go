@@ -58,7 +58,7 @@ type searchRepoTool struct{ ws *workspace.Workspace }
 
 func (t *searchRepoTool) Name() string { return "search_repo" }
 func (t *searchRepoTool) Description() string {
-	return "Recursively search the workspace tree for a regular-expression pattern and return matching lines as path:line: text. Use this to locate a symbol, an error string from the log, or a test's source file across the whole project. This crawls the WHOLE tree and can be slow, so prefer narrower lookups first: if you already know a symbol is imported, follow its import to the defining file and grep that file instead; and when you must search, pass an 'include' glob (e.g. '*.py') and search for the definition (e.g. 'def name'/'class name') rather than every use. Skips VCS, dependency, and build directories and binary files."
+	return "Recursively search the workspace tree for a regular-expression pattern and return matching lines as path:line: text. Use this to locate a symbol, an error string from the log, or a test's source file across the whole project. This crawls the WHOLE tree and can be slow, so prefer narrower lookups first: if you already know a symbol is imported, follow its import to the defining file and grep that file instead; and when you must search, pass an include glob (e.g. *.py) and search for the definition (e.g. 'def name'/'class name') rather than every use. Skips VCS, dependency, and build directories and binary files."
 }
 func (t *searchRepoTool) JSONSchema() map[string]interface{} {
 	return map[string]interface{}{
@@ -66,7 +66,7 @@ func (t *searchRepoTool) JSONSchema() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"pattern":     map[string]interface{}{"type": "string", "description": "RE2 regular expression to match against each line."},
 			"path":        map[string]interface{}{"type": "string", "description": "Workspace-relative directory to limit the search to. Defaults to the whole workspace ('.')."},
-			"include":     map[string]interface{}{"type": "string", "description": "Optional filename glob to restrict which files are searched (e.g. '*.py' or '*Test.java')."},
+			"include":     map[string]interface{}{"type": "string", "description": "Optional filename glob to restrict which files are searched (e.g. *.py or *Test.java)."},
 			"ignore_case": map[string]interface{}{"type": "boolean", "description": "Case-insensitive match (default false)."},
 		},
 		"required": []string{"pattern"},
@@ -179,13 +179,13 @@ type findFilesTool struct{ ws *workspace.Workspace }
 
 func (t *findFilesTool) Name() string { return "find_files" }
 func (t *findFilesTool) Description() string {
-	return "Find files in the workspace whose name matches a glob (e.g. '*Test.java', 'foo_client.py') or whose path contains a substring. Returns workspace-relative paths. Use this to locate a test's source file instead of crawling directories by hand."
+	return "Find files in the workspace whose name matches a glob (e.g. *Test.java, foo_client.py) or whose path contains a substring. Returns workspace-relative paths. Use this to locate a test's source file instead of crawling directories by hand."
 }
 func (t *findFilesTool) JSONSchema() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
-			"pattern":     map[string]interface{}{"type": "string", "description": "Filename glob (e.g. '*Test.java') matched against each file's name, or a plain substring matched against the full path."},
+			"pattern":     map[string]interface{}{"type": "string", "description": "Filename glob (e.g. *Test.java) matched against each file's name, or a plain substring matched against the full path."},
 			"path":        map[string]interface{}{"type": "string", "description": "Workspace-relative directory to limit the search to. Defaults to the whole workspace ('.')."},
 			"ignore_case": map[string]interface{}{"type": "boolean", "description": "Case-insensitive match (default false)."},
 		},
