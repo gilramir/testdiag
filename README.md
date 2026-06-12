@@ -67,6 +67,11 @@ testdiag https://jenkins.example.com/job/myapp/1234/
 
 # Overrides:
 testdiag -j 8 --output ./reports https://jenkins.example.com/job/myapp/1234/testReport/
+
+# Filter to a subset of failures: pass one or more substrings after the URL.
+# Only failed tests whose name (class.method) contains any of them are
+# diagnosed; with no substrings, every failed test is processed.
+testdiag https://jenkins.example.com/job/myapp/1234/ 100 LoginTest
 ```
 
 ## Placeholders

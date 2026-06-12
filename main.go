@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -45,6 +46,7 @@ type options struct {
 	Output  string
 	Debug   bool
 	URL     string
+	Filters []string
 }
 
 func main() {
@@ -82,6 +84,14 @@ func run() error {
 		Name: "url",
 		Dest: "URL",
 		Help: "Jenkins build (or test-report) URL",
+	})
+	ap.Add(&argparse.Argument{
+		Name:        "filter",
+		Dest:        "Filters",
+		NumArgsGlob: "*",
+		MetaVar:     "SUBSTRING",
+		Help: "Only diagnose tests whose name contains any of these substrings " +
+			"(default: all failed tests)",
 	})
 	// Parse handles -h/--help and reports parse errors, exiting as appropriate.
 	ap.Parse()
@@ -155,6 +165,14 @@ func run() error {
 		return nil
 	}
 
+	if len(opts.Filters) > 0 {
+		failures = filterTests(failures, opts.Filters)
+		if len(failures) == 0 {
+			fmt.Printf("No failed tests match the given filter(s): %v\n", opts.Filters)
+			return nil
+		}
+	}
+
 	fmt.Printf("Found %d failed test(s). Workspace: %s\n", len(failures), ws.Root())
 	fmt.Printf("LLM: %s @ %s (model %s). Tools: %v\n",
 		cfg.LLM.Provider, cfg.LLM.BaseURL, cfg.LLM.Model, toolNames)
@@ -224,6 +242,22 @@ done:
 		return fmt.Errorf("%d test(s) could not be diagnosed", failed)
 	}
 	return nil
+}
+
+// filterTests keeps only tests whose full name contains at least one of the
+// given substrings (OR semantics). With no substrings it returns all tests.
+func filterTests(failures []jenkins.FailedTest, substrings []string) []jenkins.FailedTest {
+	var kept []jenkins.FailedTest
+	for _, t := range failures {
+		name := t.FullName()
+		for _, s := range substrings {
+			if strings.Contains(name, s) {
+				kept = append(kept, t)
+				break
+			}
+		}
+	}
+	return kept
 }
 
 // readBackground loads TEST_AGENT.md from the workspace root if present.

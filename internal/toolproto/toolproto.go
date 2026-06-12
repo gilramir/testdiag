@@ -18,7 +18,7 @@
 //   - Nemotron / Hermes: <TOOLCALL>[{...}]</TOOLCALL>  or  <tool_call>{...}</tool_call>
 //   - Gemma:             ```tool_code\nNAME(arg="v")\n```  (optionally print(...)-wrapped)
 //   - Llama 3.x:         {"name":..,"parameters":..}  (bare, ; -separated for parallel),
-//                        optionally <|python_tag|>-prefixed, or <|python_tag|>NAME.call(arg="v")
+//     optionally <|python_tag|>-prefixed, or <|python_tag|>NAME.call(arg="v")
 //   - OpenAI structured: the response's choices[].message.tool_calls array (see FromStructured)
 package toolproto
 
