@@ -279,3 +279,92 @@ func TestRunScriptUnsupportedLanguage(t *testing.T) {
 		t.Fatal("want failure for unsupported language")
 	}
 }
+
+func TestLoopGuardNudgesRepeatedCalls(t *testing.T) {
+	ws, _ := setupWS(t)
+	ResetLoopGuard()
+	t.Cleanup(ResetLoopGuard)
+
+	tool := &loggingTool{inner: &readFileTool{ws: ws}}
+	args := map[string]interface{}{"path": "client/foo_client.py"}
+
+	// The first loopThreshold-1 calls execute for real and return file content.
+	for i := 1; i < loopThreshold; i++ {
+		res, err := tool.Execute(context.Background(), args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := res.Content.(map[string]interface{})
+		if _, looped := c["loop_detected"]; looped {
+			t.Fatalf("call %d should have executed, got a nudge", i)
+		}
+		if _, ok := c["content"]; !ok {
+			t.Fatalf("call %d: expected file content", i)
+		}
+	}
+
+	// The threshold-th identical call is intercepted with a nudge instead.
+	res, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := res.Content.(map[string]interface{})
+	if c["loop_detected"] != true {
+		t.Fatalf("call %d should have been nudged, got %v", loopThreshold, c)
+	}
+	if _, ok := c["content"]; ok {
+		t.Error("nudge must not include file content")
+	}
+}
+
+func TestLoopGuardDistinguishesArgs(t *testing.T) {
+	ws, _ := setupWS(t)
+	ResetLoopGuard()
+	t.Cleanup(ResetLoopGuard)
+
+	tool := &loggingTool{inner: &readFileTool{ws: ws}}
+	// Many calls, but each to a different path: never a loop.
+	for i := 0; i < loopThreshold+2; i++ {
+		path := "client/foo_client.py"
+		if i%2 == 0 {
+			path = "server/src/foo.cc"
+		}
+		// Alternating between two distinct calls; neither reaches the threshold
+		// until the loopThreshold-th repeat of one of them.
+		_, err := tool.Execute(context.Background(), map[string]interface{}{"path": path})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = i
+	}
+	// foo.cc was called ceil((threshold+2)/2) times; ensure a fresh, unrelated
+	// call still executes (the map is per-fingerprint, not a global counter).
+	res, err := tool.Execute(context.Background(), map[string]interface{}{"path": ".testdiag/logs/some.log"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, looped := res.Content.(map[string]interface{})["loop_detected"]; looped {
+		t.Error("a first-time call must not be treated as a loop")
+	}
+}
+
+func TestResetLoopGuard(t *testing.T) {
+	ws, _ := setupWS(t)
+	ResetLoopGuard()
+	t.Cleanup(ResetLoopGuard)
+
+	tool := &loggingTool{inner: &readFileTool{ws: ws}}
+	args := map[string]interface{}{"path": "client/foo_client.py"}
+	for i := 0; i < loopThreshold; i++ {
+		tool.Execute(context.Background(), args)
+	}
+	// After a reset the same call should execute again rather than be nudged.
+	ResetLoopGuard()
+	res, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, looped := res.Content.(map[string]interface{})["loop_detected"]; looped {
+		t.Error("ResetLoopGuard did not clear the call history")
+	}
+}

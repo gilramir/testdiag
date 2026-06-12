@@ -17,6 +17,7 @@ import (
 	"github.com/gilbertr/testdiag/internal/config"
 	"github.com/gilbertr/testdiag/internal/jenkins"
 	"github.com/gilbertr/testdiag/internal/mapping"
+	"github.com/gilbertr/testdiag/internal/tools"
 	"github.com/gilbertr/testdiag/internal/workspace"
 )
 
@@ -88,6 +89,10 @@ func (d *Diagnoser) Diagnose(ctx context.Context, test jenkins.FailedTest) (Resu
 		toolsCalled []string
 	)
 	for attempt := 1; attempt <= attempts; attempt++ {
+		// Scope loop detection to this attempt: each Run is an independent
+		// tool-calling loop, so a repeated call only signals a stuck loop within
+		// the same run, not across attempts (which use different prompts).
+		tools.ResetLoopGuard()
 		r, err := agent.Run(ctx, prompt)
 		if err != nil {
 			return Result{}, fmt.Errorf("agent run for %s: %w", test.FullName(), err)

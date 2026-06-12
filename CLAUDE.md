@@ -63,7 +63,12 @@ a time → write a report each.
   match/entry/file counts) to protect the context window. One exception to the
   read-only rule: `run_script` writes and executes a shell/Python script in the
   workspace root, but only after the operator approves the exact script at a
-  `1 = Yes / 2 = No` prompt; a decline runs nothing.
+  `1 = Yes / 2 = No` prompt; a decline runs nothing. Every call goes through a
+  `loggingTool` wrapper that also guards against loops: if the model makes the
+  exact same `(tool, args)` call `loopThreshold` times in one run, the call is
+  intercepted and replaced with a nudge to try a different approach instead of
+  re-executing. `diagnose` calls `tools.ResetLoopGuard()` before each agent run
+  to scope detection to a single attempt.
 - **`internal/diagnose`** — the core. `Diagnoser.Diagnose` maps the test, saves
   the full failure log under `<workspace>/.testdiag/logs/` (so the jailed tools
   can read it), builds a **fresh agent per test** (memory disabled, reasoning

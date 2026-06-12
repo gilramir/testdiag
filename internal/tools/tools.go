@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -84,9 +85,76 @@ func Register(ws *workspace.Workspace) []string {
 	return names
 }
 
-// loggingTool wraps a tool to emit a start/done progress line around each call
-// when verbose mode is on. It is otherwise transparent, forwarding Name,
-// Description, and JSONSchema so the provider sees the underlying tool unchanged.
+// loopThreshold is the number of identical tool calls (same tool, same
+// arguments) within one diagnosis after which we stop executing the call and
+// instead nudge the model to change approach. Two real executions of the same
+// call are allowed; the third and beyond are intercepted, because by then the
+// model is spinning on a call that is not getting it anywhere.
+const loopThreshold = 3
+
+// loopGuard tracks how many times each exact (tool, args) call has been made in
+// the current diagnosis so a model stuck repeating itself can be detected and
+// redirected. Reset between tests via ResetLoopGuard.
+type loopGuard struct {
+	mu     sync.Mutex
+	counts map[string]int
+}
+
+var guard = &loopGuard{counts: map[string]int{}}
+
+// ResetLoopGuard clears the repeated-call history. Call it at the start of each
+// agent run so loop detection is scoped to a single diagnosis attempt and never
+// bleeds across tests.
+func ResetLoopGuard() {
+	guard.mu.Lock()
+	guard.counts = map[string]int{}
+	guard.mu.Unlock()
+}
+
+// record counts this call and returns how many times this exact (tool, args)
+// call has now been made in the current diagnosis.
+func (g *loopGuard) record(fingerprint string) int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.counts[fingerprint]++
+	return g.counts[fingerprint]
+}
+
+// fingerprint builds a stable key from a tool name and its arguments so that two
+// calls match iff they are truly identical. Keys are sorted and full values are
+// used (unlike briefArgs, which truncates) so distinct large inputs never
+// collide into a false loop.
+func fingerprint(name string, args map[string]interface{}) string {
+	keys := make([]string, 0, len(args))
+	for k := range args {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	b.WriteString(name)
+	for _, k := range keys {
+		fmt.Fprintf(&b, "\x00%s=%v", k, args[k])
+	}
+	return b.String()
+}
+
+// loopNudge is the result returned in place of a repeated call: it tells the
+// model the call is not producing new information and to change approach.
+func loopNudge(name string, n int) *vnext.ToolResult {
+	return ok(map[string]interface{}{
+		"loop_detected": true,
+		"message": fmt.Sprintf("You have already called `%s` with these exact arguments %d times "+
+			"and gotten the same result each time; repeating it will not produce new information. "+
+			"Stop and try a DIFFERENT approach — for example inspect a different file, use grep or "+
+			"search_repo to locate what you need, or proceed to writing your analysis with what you "+
+			"already know.", name, n),
+	})
+}
+
+// loggingTool wraps a tool to detect repeated-call loops and (when verbose is
+// on) emit a start/done progress line around each call. It is otherwise
+// transparent, forwarding Name, Description, and JSONSchema so the provider sees
+// the underlying tool unchanged.
 type loggingTool struct{ inner vnext.Tool }
 
 func (t *loggingTool) Name() string        { return t.inner.Name() }
@@ -100,10 +168,18 @@ func (t *loggingTool) JSONSchema() map[string]interface{} {
 }
 
 func (t *loggingTool) Execute(ctx context.Context, args map[string]interface{}) (*vnext.ToolResult, error) {
+	name := t.inner.Name()
+
+	// Break repeated-call loops before doing any work: if the model has asked for
+	// the exact same thing too many times, redirect it instead of re-running.
+	if n := guard.record(fingerprint(name, args)); n >= loopThreshold {
+		vlogf("%s loop detected (%d× identical) — nudging model to change approach", name, n)
+		return loopNudge(name, n), nil
+	}
+
 	if !verbose.Load() {
 		return t.inner.Execute(ctx, args)
 	}
-	name := t.inner.Name()
 	vlogf("%s start: %s", name, briefArgs(args))
 	start := time.Now()
 	res, err := t.inner.Execute(ctx, args)
