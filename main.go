@@ -120,7 +120,8 @@ func run() error {
 	toolNames := tools.Register(ws)
 
 	// Resolve the LLM assigned to each stage. DEEPINSPECT gets the workspace
-	// source tools; LOGPARSE is a single tool-less pass over the log.
+	// source tools; LOGPARSE and FEEDBACK are tool-less passes over the log.
+	// FEEDBACK defaults to the LOGPARSE LLM when not explicitly assigned.
 	logparseLLM, err := cfg.LLMForStage(config.StageLogParse)
 	if err != nil {
 		return err
@@ -128,6 +129,10 @@ func run() error {
 	deepinspectLLM, err := cfg.LLMForStage(config.StageDeepInspect)
 	if err != nil {
 		return err
+	}
+	feedbackLLM := logparseLLM // default: same endpoint as logparse
+	if spec, ok := cfg.LLMForStageOptional(config.StageLogParseFeedback); ok {
+		feedbackLLM = spec
 	}
 
 	// Front each stage's endpoint with the in-process proxy so models with
@@ -146,9 +151,11 @@ func run() error {
 		if deepinspectLLM, err = pm.front("deepinspect", deepinspectLLM, deepTools); err != nil {
 			return err
 		}
-		// LOGPARSE never gets a tools array: it is a single pass that must not
-		// emit tool calls.
+		// LOGPARSE and FEEDBACK are tool-less passes; neither gets a tools array.
 		if logparseLLM, err = pm.front("logparse", logparseLLM, nil); err != nil {
+			return err
+		}
+		if feedbackLLM, err = pm.front("logparse_feedback", feedbackLLM, nil); err != nil {
 			return err
 		}
 	}
@@ -174,11 +181,15 @@ func run() error {
 		}
 	}
 
-	pl := pipeline.New(cfg, ws, logparseLLM, deepinspectLLM, background, opts.Verbose)
+	pl := pipeline.New(cfg, ws, logparseLLM, feedbackLLM, deepinspectLLM, background, opts.Verbose)
 
 	fmt.Printf("Found %d failed test(s). Workspace: %s\n", len(failures), ws.Root())
 	fmt.Printf("Pipeline: %v\n", pl.States())
 	fmt.Printf("  LOGPARSE    -> %s (model %s)\n", logparseLLM.BaseURL, logparseLLM.Model)
+	if cfg.Diagnosis.MaxLogParseFeedbacks > 0 {
+		fmt.Printf("  FEEDBACK    -> %s (model %s, max %d rejection(s))\n",
+			feedbackLLM.BaseURL, feedbackLLM.Model, cfg.Diagnosis.MaxLogParseFeedbacks)
+	}
 	fmt.Printf("  DEEPINSPECT -> %s (model %s). Tools: %v\n", deepinspectLLM.BaseURL, deepinspectLLM.Model, toolNames)
 	fmt.Printf("Diagnosing one at a time; reports -> %s\n\n", cfg.Output.Dir)
 

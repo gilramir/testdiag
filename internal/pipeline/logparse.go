@@ -19,35 +19,89 @@ import (
 // relative to the workspace root.
 const handoffDir = ".testdiag/handoff"
 
-// logParseStage runs ONE LLM pass over the raw failure log and distills it into
-// an investigation brief for DEEPINSPECT. It uses no tools — the whole log
-// (excerpted to the model's context window) is given inline.
+// logParseStage runs one or more LLM passes over the raw failure log and
+// distills the result into an investigation brief for DEEPINSPECT. It uses no
+// tools — the log (excerpted to the context window) is given inline. When
+// feedback is enabled, a FEEDBACK pass follows each LOGPARSE attempt; if the
+// brief is judged insufficient, LOGPARSE is retried with the critique attached,
+// up to maxFeedbacks times before the test is abandoned.
 type logParseStage struct {
-	ws  *workspace.Workspace
-	llm config.LLMSpec
+	ws           *workspace.Workspace
+	llm          config.LLMSpec
+	feedback     *feedbackChecker // nil when feedback is disabled
+	maxFeedbacks int
+	verbose      bool
 }
 
-func newLogParseStage(ws *workspace.Workspace, llm config.LLMSpec) *logParseStage {
-	return &logParseStage{ws: ws, llm: llm}
+// newLogParseStage constructs the stage. feedbackLLM may be nil (disables
+// feedback); maxFeedbacks=0 also disables it regardless of feedbackLLM.
+func newLogParseStage(ws *workspace.Workspace, llm config.LLMSpec, feedbackLLM *config.LLMSpec, maxFeedbacks int, verbose bool) *logParseStage {
+	var fb *feedbackChecker
+	if feedbackLLM != nil && maxFeedbacks > 0 {
+		fb = newFeedbackChecker(*feedbackLLM)
+	}
+	return &logParseStage{ws: ws, llm: llm, feedback: fb, maxFeedbacks: maxFeedbacks, verbose: verbose}
 }
 
 func (s *logParseStage) Name() State { return StateLogParse }
 
 func (s *logParseStage) Run(ctx context.Context, sc *Context) error {
-	agent, err := s.buildAgent(sc.Test)
-	if err != nil {
-		return fmt.Errorf("building agent: %w", err)
-	}
 	head, tail := s.excerptHeadTail()
 	excerpt := makeExcerpt(combinedLog(sc.Test), head, tail)
-	r, err := agent.Run(ctx, buildLogParsePrompt(sc.Test, excerpt))
-	if err != nil {
-		return fmt.Errorf("agent run: %w", err)
+
+	var (
+		prevBrief string
+		critique  string
+	)
+	for feedbacks := 0; ; {
+		agent, err := s.buildAgent(sc.Test)
+		if err != nil {
+			return fmt.Errorf("building agent: %w", err)
+		}
+		var prompt string
+		if critique == "" {
+			prompt = buildLogParsePrompt(sc.Test, excerpt)
+		} else {
+			prompt = buildLogParseRetryPrompt(sc.Test, excerpt, prevBrief, critique)
+		}
+		r, err := agent.Run(ctx, prompt)
+		if err != nil {
+			return fmt.Errorf("agent run: %w", err)
+		}
+		if strings.TrimSpace(r.Content) == "" {
+			return fmt.Errorf("agent returned empty brief for %s", sc.Test.FullName())
+		}
+		brief := ensureTestFile(r.Content, sc.Test)
+
+		if s.feedback == nil {
+			return s.saveBrief(sc, brief)
+		}
+
+		ok, newCritique, err := s.feedback.Check(ctx, sc.Test, brief)
+		if err != nil {
+			return fmt.Errorf("feedback: %w", err)
+		}
+		if s.verbose {
+			if ok {
+				fmt.Fprintf(os.Stdout, "  FEEDBACK: APPROVED\n")
+			} else {
+				fmt.Fprintf(os.Stdout, "  FEEDBACK: NEEDS REVISION: %s\n", newCritique)
+			}
+		}
+		if ok {
+			return s.saveBrief(sc, brief)
+		}
+		feedbacks++
+		if feedbacks >= s.maxFeedbacks {
+			return fmt.Errorf("%s: LOGPARSE brief did not meet goals after %d feedback(s): %s",
+				sc.Test.FullName(), feedbacks, newCritique)
+		}
+		prevBrief = brief
+		critique = newCritique
 	}
-	if strings.TrimSpace(r.Content) == "" {
-		return fmt.Errorf("agent returned empty brief for %s", sc.Test.FullName())
-	}
-	brief := ensureTestFile(r.Content, sc.Test)
+}
+
+func (s *logParseStage) saveBrief(sc *Context, brief string) error {
 	rel, err := s.writeBrief(sc.Test, brief)
 	if err != nil {
 		return err
@@ -193,5 +247,34 @@ func buildLogParsePrompt(test jenkins.FailedTest, logExcerpt string) string {
 	b.WriteString(logExcerpt)
 	b.WriteString("\n```\n\n")
 	b.WriteString("Remember: the next engineer will only see your brief, not this log. Name the exact files, symbols, and conditions they should investigate.")
+	return b.String()
+}
+
+// buildLogParseRetryPrompt assembles the retry user message when a previous
+// brief was judged insufficient. It provides the original log, the previous
+// brief, and the feedback critique so the model knows exactly what to fix.
+func buildLogParseRetryPrompt(test jenkins.FailedTest, logExcerpt, prevBrief, critique string) string {
+	var b strings.Builder
+	b.WriteString("Your previous investigation brief was reviewed and found to be insufficient. ")
+	b.WriteString("Produce an improved brief that addresses the specific gaps listed below.\n\n")
+	b.WriteString("## What needs to be fixed\n")
+	b.WriteString(strings.TrimSpace(critique))
+	b.WriteString("\n\n## Your previous brief (for reference)\n")
+	b.WriteString(strings.TrimSpace(prevBrief))
+	b.WriteString("\n\n## Failing test\n")
+	fmt.Fprintf(&b, "- Name: %s\n", test.FullName())
+	if test.Status != "" {
+		fmt.Fprintf(&b, "- Status: %s\n", test.Status)
+	}
+	b.WriteString("\n")
+	if strings.TrimSpace(test.ErrorDetails) != "" {
+		b.WriteString("## Error details\n```\n")
+		b.WriteString(strings.TrimSpace(test.ErrorDetails))
+		b.WriteString("\n```\n\n")
+	}
+	b.WriteString("## Failure log\n```\n")
+	b.WriteString(logExcerpt)
+	b.WriteString("\n```\n\n")
+	b.WriteString("Remember: address every gap listed above. The next engineer will only see your brief, not this log.")
 	return b.String()
 }

@@ -22,8 +22,9 @@ import (
 
 // Stage names. They double as the keys in the [stages] table.
 const (
-	StageLogParse    = "logparse"
-	StageDeepInspect = "deepinspect"
+	StageLogParse         = "logparse"
+	StageLogParseFeedback = "logparse_feedback" // optional; falls back to logparse LLM
+	StageDeepInspect      = "deepinspect"
 )
 
 // Config is the fully-resolved configuration for a testdiag run.
@@ -85,7 +86,7 @@ type Workspace struct {
 	Root string `toml:"root"`
 }
 
-// Diagnosis tunes the per-test DEEPINSPECT agent loop.
+// Diagnosis tunes the per-test agent loops.
 type Diagnosis struct {
 	// MaxAttempts is the total number of agent attempts per test, including the
 	// first. When >1, a critique/revise feedback loop re-runs the agent with the
@@ -98,6 +99,9 @@ type Diagnosis struct {
 	// result back before it must produce an answer. The worst-case number of LLM
 	// round-trips per test is therefore MaxAttempts * MaxToolIterations.
 	MaxToolIterations int `toml:"max_tool_iterations"`
+	// MaxLogParseFeedbacks is the number of times the FEEDBACK stage may reject
+	// a LOGPARSE brief before the test is abandoned. 0 disables feedback entirely.
+	MaxLogParseFeedbacks int `toml:"max_logparse_feedbacks"`
 }
 
 // Output controls how diagnosis reports are written.
@@ -117,6 +121,19 @@ func (c *Config) LLMForStage(stage string) (LLMSpec, error) {
 		return LLMSpec{}, fmt.Errorf("stage %q references undefined LLM %q (define [llms.%s])", stage, name, name)
 	}
 	return spec, nil
+}
+
+// LLMForStageOptional resolves the LLM for a stage that may have no explicit
+// assignment. Unlike LLMForStage it does not error on a missing or unknown
+// assignment — it returns (zero, false) instead, letting the caller supply a
+// fallback. Use this for optional stages like logparse_feedback.
+func (c *Config) LLMForStageOptional(stage string) (LLMSpec, bool) {
+	name, ok := c.Stages[stage]
+	if !ok || name == "" {
+		return LLMSpec{}, false
+	}
+	spec, ok := c.LLMs[name]
+	return spec, ok
 }
 
 // Path returns the default config file location.
@@ -170,8 +187,9 @@ func defaults() *Config {
 			Dir: "test-diagnosis",
 		},
 		Diagnosis: Diagnosis{
-			MaxAttempts:       3,
-			MaxToolIterations: 50,
+			MaxAttempts:          3,
+			MaxToolIterations:    50,
+			MaxLogParseFeedbacks: 2,
 		},
 	}
 }
@@ -219,6 +237,7 @@ func applyEnvOverrides(cfg *Config) {
 
 	setInt(&cfg.Diagnosis.MaxAttempts, "TESTDIAG_MAX_ATTEMPTS")
 	setInt(&cfg.Diagnosis.MaxToolIterations, "TESTDIAG_MAX_TOOL_ITERATIONS")
+	setInt(&cfg.Diagnosis.MaxLogParseFeedbacks, "TESTDIAG_MAX_LOGPARSE_FEEDBACKS")
 }
 
 // envName upper-cases an LLM name and replaces any non-alphanumeric run with a

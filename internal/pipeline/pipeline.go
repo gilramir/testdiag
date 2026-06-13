@@ -5,13 +5,16 @@
 //	LOGPARSE    — one LLM pass over that log → an investigation brief
 //	             (.testdiag/handoff/<test>.logparse.md): the first real error, the
 //	             source/logic to find, and the flakiness conditions to check
+//	FEEDBACK    — (optional) a second tool-less LLM pass that checks whether the
+//	             brief meets the investigation goals; if not, LOGPARSE is retried
+//	             with the critique attached, up to Diagnosis.MaxLogParseFeedbacks
+//	             times before the test is abandoned
 //	DEEPINSPECT — a fresh LLM that gets ONLY the brief (not the raw log) plus the
 //	             workspace source tools, and produces the root-cause report
 //
-// Different LLMs can be assigned to LOGPARSE and DEEPINSPECT (see config), so a
-// cheap model can summarize the noisy log while a stronger one does the deep
-// source tracing. The split, and withholding the raw log from DEEPINSPECT, is
-// what keeps each model focused. New stages can be added to the slice in New.
+// Different LLMs can be assigned to each stage (see config), so a cheap model
+// can summarize and self-review the noisy log while a stronger one does the deep
+// source tracing. New stages can be added to the slice in New.
 package pipeline
 
 import (
@@ -30,6 +33,7 @@ type State string
 const (
 	StateDownload    State = "DOWNLOAD"
 	StateLogParse    State = "LOGPARSE"
+	StateFeedback    State = "FEEDBACK"
 	StateDeepInspect State = "DEEPINSPECT"
 	StateDone        State = "DONE"
 )
@@ -54,29 +58,43 @@ type Stage interface {
 
 // Pipeline runs the ordered stages for each test against a fixed workspace.
 type Pipeline struct {
-	stages []Stage
+	stages     []Stage
+	stateNames []State // for display; may include virtual states like FEEDBACK
 }
 
-// New builds the DOWNLOAD → LOGPARSE → DEEPINSPECT pipeline. logparseLLM and
-// deepinspectLLM are the LLMs assigned to those stages; background is the
-// TEST_AGENT.md content (may be ""). verbose enables per-stage progress output.
-func New(cfg *config.Config, ws *workspace.Workspace, logparseLLM, deepinspectLLM config.LLMSpec, background string, verbose bool) *Pipeline {
+// New builds the DOWNLOAD → LOGPARSE [→ FEEDBACK] → DEEPINSPECT pipeline.
+// feedbackLLM is the LLM for the FEEDBACK gate (may equal logparseLLM).
+// When cfg.Diagnosis.MaxLogParseFeedbacks is 0 the feedback loop is disabled.
+// background is the TEST_AGENT.md content (may be ""). verbose enables
+// per-stage progress output.
+func New(cfg *config.Config, ws *workspace.Workspace, logparseLLM, feedbackLLM, deepinspectLLM config.LLMSpec, background string, verbose bool) *Pipeline {
+	maxFB := cfg.Diagnosis.MaxLogParseFeedbacks
+	var feedbackSpec *config.LLMSpec
+	if maxFB > 0 {
+		s := feedbackLLM
+		feedbackSpec = &s
+	}
+
+	names := []State{StateDownload, StateLogParse}
+	if maxFB > 0 {
+		names = append(names, StateFeedback)
+	}
+	names = append(names, StateDeepInspect)
+
 	return &Pipeline{
 		stages: []Stage{
 			&downloadStage{ws: ws},
-			newLogParseStage(ws, logparseLLM),
+			newLogParseStage(ws, logparseLLM, feedbackSpec, maxFB, verbose),
 			newDeepInspectStage(diagnose.New(cfg, ws, deepinspectLLM, background), verbose),
 		},
+		stateNames: names,
 	}
 }
 
-// States returns the ordered stage names, for logging the configured pipeline.
+// States returns the pipeline stage names in order, for display. It includes
+// FEEDBACK when the feedback loop is enabled.
 func (p *Pipeline) States() []State {
-	out := make([]State, 0, len(p.stages))
-	for _, s := range p.stages {
-		out = append(out, s.Name())
-	}
-	return out
+	return p.stateNames
 }
 
 // Run drives one test through every stage in order, stopping at the first error
