@@ -55,18 +55,25 @@ The pipeline is sequential: fetch failures → run each failure through the stag
   independent (no shared agent state); sequential execution keeps output and
   `run_script` approval prompts coherent for the operator.
 
-- **`internal/config`** — TOML at `~/.config/testdiag/config.toml`, with `TESTDIAG_*`
-  env vars overriding the file (env always wins, for CI secrets). LLMs are defined
-  once under `[llms.<name>]` and each stage points at one by name under `[stages]`;
-  `LLMForStage` resolves the pair and errors clearly if a required stage is unassigned.
-  Optional stage assignments (hypothesize, combine, all feedback stages) are resolved
-  via `LLMForStageOptional` and fall back to a sensible default at the call site.
-  Per-stage tuning knobs live under `[stage_config]` as a flat struct (`StageConfig`):
-  `logparse_max_feedbacks`, `hypothesize_max_feedbacks`, `deepinspect_max_feedbacks`,
-  `deepinspect_max_tool_iterations`, `combine_max_feedbacks` — each has a
-  `TESTDIAG_<STAGE>_*` env var. `Workspace.ArchitectureDoc` (config key
-  `workspace.architecture_doc`, env `TESTDIAG_ARCHITECTURE_DOC`) is the
-  workspace-relative path to an architecture document HYPOTHESIZE reads.
+- **`internal/config`** — Two-level TOML config, then `TESTDIAG_*` env vars (env
+  always wins). `Load()` bootstraps the workspace root before reading any file:
+  `TESTDIAG_WORKSPACE_ROOT` if set, otherwise the nearest ancestor of CWD that
+  contains a `.git` entry (walking up), otherwise CWD. It then reads
+  `<workspace>/testdiag.toml` (project config, checked in) followed by
+  `~/.config/testdiag/config.toml` (user overrides, API keys); both files accept
+  every config key and later values override earlier ones. The user config path is
+  returned by `UserConfigPath()` (renamed from `Path()` in the two-file redesign).
+  LLMs are defined once under `[llms.<name>]` and each stage points at one by name
+  under `[stages]`; `LLMForStage` resolves the pair and errors clearly if a required
+  stage is unassigned. Optional stage assignments (hypothesize, combine, all feedback
+  stages) are resolved via `LLMForStageOptional` and fall back to a sensible default
+  at the call site. Per-stage tuning knobs live under `[stage_config]` as a flat
+  struct (`StageConfig`): `logparse_max_feedbacks`, `hypothesize_max_feedbacks`,
+  `deepinspect_max_feedbacks`, `deepinspect_max_tool_iterations`,
+  `combine_max_feedbacks` — each has a `TESTDIAG_<STAGE>_*` env var.
+  `Workspace.ArchitectureDoc` (config key `workspace.architecture_doc`, env
+  `TESTDIAG_ARCHITECTURE_DOC`) is the workspace-relative path to an architecture
+  document HYPOTHESIZE reads.
 
 - **`internal/pipeline`** — the stage state machine. `Pipeline.Run` threads a
   per-test `Context` through ordered `Stage`s, stopping at the first unrecoverable

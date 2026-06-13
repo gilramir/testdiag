@@ -108,15 +108,30 @@ calls and nudges the model to change approach.
 
 ```sh
 go mod tidy                      # download AgenticGoKit + deps
-cp config.example.toml ~/.config/testdiag/config.toml
+cp config.example.toml testdiag.toml    # workspace config (check this in)
+$EDITOR testdiag.toml
+cp config.example.toml ~/.config/testdiag/config.toml  # optional user overrides
 $EDITOR ~/.config/testdiag/config.toml
 ```
 
-Configuration (file + `TESTDIAG_*` env overrides; env always wins, for CI secrets)
-is documented in [`config.example.toml`](config.example.toml). At minimum: define
-at least one LLM under `[llms.<name>]` (with `base_url` + `model`), assign one to
-`logparse` and `deepinspect` under `[stages]`, and set your Jenkins `user` +
-`api_token`.
+### Two-level configuration
+
+testdiag reads two config files in order; later values override earlier ones:
+
+| Priority | File | Typical use |
+|----------|------|-------------|
+| 1 (lowest) | `<workspace>/testdiag.toml` | LLM endpoints, stage assignments, per-stage knobs — checked in with the repo |
+| 2 | `~/.config/testdiag/config.toml` | API keys, personal overrides |
+| 3 (highest) | `TESTDIAG_*` env vars | CI secrets |
+
+The workspace root used to locate `testdiag.toml` is resolved before any config
+is read: `TESTDIAG_WORKSPACE_ROOT` if set, otherwise the nearest ancestor of CWD
+containing a `.git` directory, falling back to CWD itself.
+
+Both files accept every key documented in [`config.example.toml`](config.example.toml).
+At minimum: define at least one LLM under `[llms.<name>]` (with `base_url` +
+`model`), assign one to `logparse` and `deepinspect` under `[stages]`, and set
+your Jenkins `user` + `api_token`.
 
 ```toml
 [llms.fast]

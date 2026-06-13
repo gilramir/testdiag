@@ -1,7 +1,18 @@
 # testdiag configuration.
 #
-# Copy to ~/.config/testdiag/config.toml and edit. Every value can also be set
-# (or overridden) with an environment variable — handy for secrets in CI.
+# testdiag reads TWO config files in order; later files override earlier ones:
+#
+#   1. <workspace>/testdiag.toml   — project config, checked in with the repo
+#                                    (workspace root = nearest ancestor with .git,
+#                                    or TESTDIAG_WORKSPACE_ROOT if set)
+#   2. ~/.config/testdiag/config.toml — user overrides (API keys, personal prefs)
+#
+# Both files accept every key documented below. Typically the workspace file
+# holds LLM endpoints, stage assignments, and per-stage knobs, while the user
+# file holds only api_key values and personal overrides.
+#
+# After both files are merged, TESTDIAG_* environment variables win over
+# everything — handy for CI secrets.
 #
 # The pipeline is:
 #   DOWNLOAD → LOGPARSE → FEEDBACK → HYPOTHESIZE → FEEDBACK →

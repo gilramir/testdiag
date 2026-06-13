@@ -173,38 +173,49 @@ func (c *Config) LLMForStageOptional(stage string) (LLMSpec, bool) {
 	return spec, ok
 }
 
-// Path returns the default config file location.
-func Path() (string, error) {
-	dir, err := os.UserConfigDir() // ~/.config on Linux
+// UserConfigPath returns the user-level config file location
+// (~/.config/testdiag/config.toml on Linux).
+func UserConfigPath() (string, error) {
+	dir, err := os.UserConfigDir()
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(dir, "testdiag", "config.toml"), nil
 }
 
-// Load reads the config file (if present) and applies environment overrides.
-// A missing file is not an error: env vars alone may provide everything.
+// Load reads configuration from two sources in order, with later sources
+// overriding earlier ones, then applies environment-variable overrides:
+//
+//  1. <workspace>/testdiag.toml  — project config, checked in with the repo
+//  2. ~/.config/testdiag/config.toml — user config (API keys, personal prefs)
+//  3. TESTDIAG_* environment variables — always win, for CI secrets
+//
+// The workspace root used to locate testdiag.toml is resolved before any
+// config file is read: TESTDIAG_WORKSPACE_ROOT if set, otherwise the nearest
+// ancestor directory that contains a .git entry (walking up from CWD), falling
+// back to CWD itself. This bootstrap root also becomes the final workspace.root
+// when neither config file sets it explicitly.
 func Load() (*Config, error) {
 	cfg := defaults()
 
-	path, err := Path()
+	wsRoot := bootstrapWorkspaceRoot()
+
+	if err := loadIfExists(filepath.Join(wsRoot, "testdiag.toml"), cfg); err != nil {
+		return nil, err
+	}
+
+	userPath, err := UserConfigPath()
 	if err != nil {
 		return nil, err
 	}
-	if _, statErr := os.Stat(path); statErr == nil {
-		if _, err := toml.DecodeFile(path, cfg); err != nil {
-			return nil, fmt.Errorf("parsing %s: %w", path, err)
-		}
-	} else if !os.IsNotExist(statErr) {
-		return nil, fmt.Errorf("reading %s: %w", path, statErr)
+	if err := loadIfExists(userPath, cfg); err != nil {
+		return nil, err
 	}
 
 	applyEnvOverrides(cfg)
 
 	if cfg.Workspace.Root == "" {
-		if wd, err := os.Getwd(); err == nil {
-			cfg.Workspace.Root = wd
-		}
+		cfg.Workspace.Root = wsRoot
 	}
 	if abs, err := filepath.Abs(cfg.Workspace.Root); err == nil {
 		cfg.Workspace.Root = abs
@@ -212,6 +223,59 @@ func Load() (*Config, error) {
 
 	cfg.normalizeLLMs()
 	return cfg, cfg.validate()
+}
+
+// bootstrapWorkspaceRoot returns the workspace root to use when locating
+// testdiag.toml, before any config file has been read:
+//  1. TESTDIAG_WORKSPACE_ROOT env var if set
+//  2. Nearest ancestor of CWD that contains a .git entry
+//  3. CWD itself
+func bootstrapWorkspaceRoot() string {
+	if v := os.Getenv("TESTDIAG_WORKSPACE_ROOT"); v != "" {
+		return v
+	}
+	if root, ok := findGitRoot(); ok {
+		return root
+	}
+	if wd, err := os.Getwd(); err == nil {
+		return wd
+	}
+	return "."
+}
+
+// findGitRoot walks up from CWD looking for a directory that contains .git.
+// Returns the directory and true on success, or ("", false) if none is found.
+func findGitRoot() (string, bool) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", false
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return dir, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false // reached filesystem root
+		}
+		dir = parent
+	}
+}
+
+// loadIfExists decodes path into cfg when the file exists. A missing file is
+// not an error. Any other stat or parse error is returned.
+func loadIfExists(path string, cfg *Config) error {
+	_, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", path, err)
+	}
+	if _, err := toml.DecodeFile(path, cfg); err != nil {
+		return fmt.Errorf("parsing %s: %w", path, err)
+	}
+	return nil
 }
 
 func defaults() *Config {
