@@ -33,13 +33,10 @@ type logParseStage struct {
 	verbose      bool
 }
 
-// newLogParseStage constructs the stage. feedbackLLM may be nil (disables
-// feedback); maxFeedbacks=0 also disables it regardless of feedbackLLM.
-func newLogParseStage(ws *workspace.Workspace, llm config.LLMSpec, feedbackLLM *config.LLMSpec, maxFeedbacks int, verbose bool) *logParseStage {
-	var fb *feedbackChecker
-	if feedbackLLM != nil && maxFeedbacks > 0 {
-		fb = newFeedbackChecker(*feedbackLLM)
-	}
+// newLogParseStage constructs the stage. fb is nil when feedback is disabled
+// (maxFeedbacks=0 or no feedback LLM configured); both are set together by
+// pipeline.New before calling this.
+func newLogParseStage(ws *workspace.Workspace, llm config.LLMSpec, fb *feedbackChecker, maxFeedbacks int, verbose bool) *logParseStage {
 	return &logParseStage{ws: ws, llm: llm, feedback: fb, maxFeedbacks: maxFeedbacks, verbose: verbose}
 }
 

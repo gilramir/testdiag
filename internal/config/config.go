@@ -4,7 +4,11 @@
 // Environment variables always win over the file, so secrets can be injected
 // at runtime (e.g. in CI) without writing them to disk.
 //
-// The workflow is a state machine of stages (DOWNLOAD → LOGPARSE → DEEPINSPECT).
+// The workflow is a state machine of stages:
+//
+//	DOWNLOAD → LOGPARSE → FEEDBACK → HYPOTHESIZE → FEEDBACK →
+//	[DEEPINSPECT → FEEDBACK] × N → COMBINE → FEEDBACK
+//
 // LLMs are defined once under [llms.<name>] and each stage points at one by
 // name under [stages]; this lets a cheap model summarize the log while a
 // stronger model does the deep source tracing.
@@ -20,22 +24,27 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// Stage names. They double as the keys in the [stages] table.
+// Stage names — the keys used in the [stages] table.
 const (
-	StageLogParse         = "logparse"
-	StageLogParseFeedback = "logparse_feedback" // optional; falls back to logparse LLM
-	StageDeepInspect      = "deepinspect"
+	StageLogParse            = "logparse"
+	StageLogParseFeedback    = "logparse_feedback"    // optional; falls back to logparse LLM
+	StageHypothsize          = "hypothesize"          // optional; falls back to logparse LLM
+	StageHypothsizeFeedback  = "hypothesize_feedback" // optional; falls back to hypothesize LLM
+	StageDeepInspect         = "deepinspect"
+	StageDeepInspectFeedback = "deepinspect_feedback" // optional; falls back to deepinspect LLM
+	StageCombine             = "combine"              // optional; falls back to logparse LLM
+	StageCombineFeedback     = "combine_feedback"     // optional; falls back to combine LLM
 )
 
 // Config is the fully-resolved configuration for a testdiag run.
 type Config struct {
-	Jenkins   Jenkins            `toml:"jenkins"`
-	LLMs      map[string]LLMSpec `toml:"llms"`   // named LLMs, referenced by stages
-	Stages    map[string]string  `toml:"stages"` // stage name -> LLM name
-	Proxy     Proxy              `toml:"proxy"`
-	Workspace Workspace          `toml:"workspace"`
-	Output    Output             `toml:"output"`
-	Diagnosis Diagnosis          `toml:"diagnosis"`
+	Jenkins     Jenkins            `toml:"jenkins"`
+	LLMs        map[string]LLMSpec `toml:"llms"`        // named LLMs, referenced by stages
+	Stages      map[string]string  `toml:"stages"`      // stage name -> LLM name
+	Proxy       Proxy              `toml:"proxy"`
+	Workspace   Workspace          `toml:"workspace"`
+	Output      Output             `toml:"output"`
+	StageConfig StageConfig        `toml:"stage_config"`
 }
 
 // Jenkins holds credentials for talking to the Jenkins HTTP API. Jenkins uses
@@ -47,8 +56,8 @@ type Jenkins struct {
 }
 
 // LLMSpec is one named LLM endpoint. Several may be defined and assigned to
-// different stages. Each points at any OpenAI-API-compatible server (including a
-// local one).
+// different stages. Each points at any OpenAI-API-compatible server (including
+// a local one).
 type LLMSpec struct {
 	Provider      string  `toml:"provider"`       // "openai" for OpenAI-compatible servers
 	BaseURL       string  `toml:"base_url"`       // e.g. http://localhost:1234/v1
@@ -59,8 +68,8 @@ type LLMSpec struct {
 	MaxTokens     int     `toml:"max_tokens"`     // max tokens per completion
 }
 
-// Proxy configures the in-process normalizing reverse proxy that fronts each LLM
-// endpoint. These knobs are global because they apply identically to every
+// Proxy configures the in-process normalizing reverse proxy that fronts each
+// LLM endpoint. These knobs are global because they apply identically to every
 // endpoint the stages talk to.
 type Proxy struct {
 	// NormalizeToolCalls runs requests through an in-process proxy that rewrites
@@ -84,24 +93,43 @@ type Workspace struct {
 	// against. If empty, the current working directory is used. TEST_AGENT.md
 	// is expected at the root of this directory.
 	Root string `toml:"root"`
+	// ArchitectureDoc is the workspace-relative path to a document describing
+	// the system architecture. HYPOTHESIZE reads it to reason about what
+	// components could have caused the failure. Optional — if empty or the file
+	// does not exist, HYPOTHESIZE works from the investigation brief alone.
+	ArchitectureDoc string `toml:"architecture_doc"`
 }
 
-// Diagnosis tunes the per-test agent loops.
-type Diagnosis struct {
-	// MaxAttempts is the total number of agent attempts per test, including the
-	// first. When >1, a critique/revise feedback loop re-runs the agent with the
-	// previous draft and the specific gaps fed back, whenever an attempt looks
-	// shallow (didn't explore source / didn't identify a flakiness mechanism).
-	// A value of 1 disables the loop.
-	MaxAttempts int `toml:"max_attempts"`
-	// MaxToolIterations caps the native tool-calling loop within a SINGLE attempt
-	// (one agent.Run): how many times the agent may call a tool and feed the
-	// result back before it must produce an answer. The worst-case number of LLM
-	// round-trips per test is therefore MaxAttempts * MaxToolIterations.
-	MaxToolIterations int `toml:"max_tool_iterations"`
-	// MaxLogParseFeedbacks is the number of times the FEEDBACK stage may reject
-	// a LOGPARSE brief before the test is abandoned. 0 disables feedback entirely.
-	MaxLogParseFeedbacks int `toml:"max_logparse_feedbacks"`
+// StageConfig holds per-stage tuning knobs. Each field controls a specific
+// aspect of one pipeline stage; zero values use the built-in defaults.
+//
+// In config.toml:
+//
+//	[stage_config]
+//	logparse_max_feedbacks = 2
+//	hypothesize_max_feedbacks = 2
+//	deepinspect_max_feedbacks = 1
+//	deepinspect_max_tool_iterations = 50
+//	combine_max_feedbacks = 2
+type StageConfig struct {
+	// LogParseMaxFeedbacks is the number of times the FEEDBACK stage may reject
+	// a LOGPARSE brief before the test is abandoned. 0 disables LOGPARSE feedback.
+	LogParseMaxFeedbacks int `toml:"logparse_max_feedbacks"`
+	// HypothesizeMaxFeedbacks is the number of times the FEEDBACK stage may
+	// reject a HYPOTHESIZE output. 0 disables HYPOTHESIZE feedback.
+	HypothesizeMaxFeedbacks int `toml:"hypothesize_max_feedbacks"`
+	// DeepInspectMaxFeedbacks is the number of times the FEEDBACK stage may
+	// reject a DEEPINSPECT result for one hypothesis before marking it as
+	// failed (and moving on to the next hypothesis). 0 disables DEEPINSPECT
+	// feedback.
+	DeepInspectMaxFeedbacks int `toml:"deepinspect_max_feedbacks"`
+	// DeepInspectMaxToolIterations caps the tool-calling loop within a single
+	// DEEPINSPECT attempt: how many times the agent may call a tool and feed
+	// the result back before it must produce an answer.
+	DeepInspectMaxToolIterations int `toml:"deepinspect_max_tool_iterations"`
+	// CombineMaxFeedbacks is the number of times the FEEDBACK stage may reject
+	// the COMBINE output. 0 disables COMBINE feedback.
+	CombineMaxFeedbacks int `toml:"combine_max_feedbacks"`
 }
 
 // Output controls how diagnosis reports are written.
@@ -126,7 +154,8 @@ func (c *Config) LLMForStage(stage string) (LLMSpec, error) {
 // LLMForStageOptional resolves the LLM for a stage that may have no explicit
 // assignment. Unlike LLMForStage it does not error on a missing or unknown
 // assignment — it returns (zero, false) instead, letting the caller supply a
-// fallback. Use this for optional stages like logparse_feedback.
+// fallback. Use this for optional stages like hypothesize, combine, and the
+// per-stage feedback overrides.
 func (c *Config) LLMForStageOptional(stage string) (LLMSpec, bool) {
 	name, ok := c.Stages[stage]
 	if !ok || name == "" {
@@ -186,10 +215,12 @@ func defaults() *Config {
 		Output: Output{
 			Dir: "test-diagnosis",
 		},
-		Diagnosis: Diagnosis{
-			MaxAttempts:          3,
-			MaxToolIterations:    50,
-			MaxLogParseFeedbacks: 2,
+		StageConfig: StageConfig{
+			LogParseMaxFeedbacks:         2,
+			HypothesizeMaxFeedbacks:      2,
+			DeepInspectMaxFeedbacks:      1,
+			DeepInspectMaxToolIterations: 50,
+			CombineMaxFeedbacks:          2,
 		},
 	}
 }
@@ -232,12 +263,15 @@ func applyEnvOverrides(cfg *Config) {
 	setBool(&cfg.Proxy.Debug, "TESTDIAG_PROXY_DEBUG")
 
 	setStr(&cfg.Workspace.Root, "TESTDIAG_WORKSPACE_ROOT")
+	setStr(&cfg.Workspace.ArchitectureDoc, "TESTDIAG_ARCHITECTURE_DOC")
 
 	setStr(&cfg.Output.Dir, "TESTDIAG_OUTPUT_DIR")
 
-	setInt(&cfg.Diagnosis.MaxAttempts, "TESTDIAG_MAX_ATTEMPTS")
-	setInt(&cfg.Diagnosis.MaxToolIterations, "TESTDIAG_MAX_TOOL_ITERATIONS")
-	setInt(&cfg.Diagnosis.MaxLogParseFeedbacks, "TESTDIAG_MAX_LOGPARSE_FEEDBACKS")
+	setInt(&cfg.StageConfig.LogParseMaxFeedbacks, "TESTDIAG_LOGPARSE_MAX_FEEDBACKS")
+	setInt(&cfg.StageConfig.HypothesizeMaxFeedbacks, "TESTDIAG_HYPOTHESIZE_MAX_FEEDBACKS")
+	setInt(&cfg.StageConfig.DeepInspectMaxFeedbacks, "TESTDIAG_DEEPINSPECT_MAX_FEEDBACKS")
+	setInt(&cfg.StageConfig.DeepInspectMaxToolIterations, "TESTDIAG_DEEPINSPECT_MAX_TOOL_ITERATIONS")
+	setInt(&cfg.StageConfig.CombineMaxFeedbacks, "TESTDIAG_COMBINE_MAX_FEEDBACKS")
 }
 
 // envName upper-cases an LLM name and replaces any non-alphanumeric run with a
@@ -278,11 +312,8 @@ func (c *Config) validate() error {
 			return err
 		}
 	}
-	if c.Diagnosis.MaxAttempts < 1 {
-		c.Diagnosis.MaxAttempts = 1
-	}
-	if c.Diagnosis.MaxToolIterations < 1 {
-		c.Diagnosis.MaxToolIterations = 50
+	if cfg := &c.StageConfig; cfg.DeepInspectMaxToolIterations < 1 {
+		cfg.DeepInspectMaxToolIterations = 50
 	}
 	return nil
 }

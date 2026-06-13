@@ -8,12 +8,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gilbertr/testdiag/internal/diagnose"
+	"github.com/gilbertr/testdiag/internal/pipeline"
 )
 
 // Write writes a single diagnosis as a Markdown file under outDir and returns
 // the path written.
-func Write(outDir string, r diagnose.Result) (string, error) {
+func Write(outDir string, r pipeline.FinalResult) (string, error) {
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return "", err
 	}
@@ -25,7 +25,7 @@ func Write(outDir string, r diagnose.Result) (string, error) {
 	return path, nil
 }
 
-func render(r diagnose.Result) string {
+func render(r pipeline.FinalResult) string {
 	var b strings.Builder
 
 	fmt.Fprintf(&b, "# Test failure root cause: %s\n\n", r.Test.FullName())
@@ -35,30 +35,67 @@ func render(r diagnose.Result) string {
 	if r.Test.Status != "" {
 		fmt.Fprintf(&b, "| Status | %s |\n", r.Test.Status)
 	}
-	if r.Mapping.SourceFile != "" {
-		fmt.Fprintf(&b, "| Source file | `%s` |\n", r.Mapping.SourceFile)
-	}
 	if r.LogPath != "" {
 		fmt.Fprintf(&b, "| Saved log | `%s` |\n", r.LogPath)
 	}
 	if r.Test.ReportURL != "" {
 		fmt.Fprintf(&b, "| Jenkins report | %s |\n", r.Test.ReportURL)
 	}
+	fmt.Fprintf(&b, "| Hypotheses | %d |\n", len(r.Hypotheses))
+	approved, failed := countOutcomes(r.DeepInspects)
+	fmt.Fprintf(&b, "| Deep inspections | %d approved, %d failed |\n", approved, failed)
 	fmt.Fprintf(&b, "| Analyzed | %s |\n", time.Now().Format(time.RFC3339))
-	fmt.Fprintf(&b, "| Diagnosis time | %s |\n", r.Duration.Round(time.Millisecond))
+	fmt.Fprintf(&b, "| Duration | %s |\n", r.Duration.Round(time.Millisecond))
 	b.WriteString("\n---\n\n")
 
-	body := strings.TrimSpace(r.RootCause)
+	body := strings.TrimSpace(r.Combined)
 	if body == "" {
-		body = "_The agent produced no analysis._"
+		body = "_The COMBINE stage produced no analysis._"
 	}
 	b.WriteString(body)
 	b.WriteString("\n")
 
-	if len(r.ToolsCalled) > 0 {
-		fmt.Fprintf(&b, "\n---\n\n_Tools used: %s_\n", strings.Join(r.ToolsCalled, ", "))
+	// Appendix: per-hypothesis DEEPINSPECT results for traceability.
+	if len(r.DeepInspects) > 0 {
+		b.WriteString("\n---\n\n## Appendix: per-hypothesis investigation results\n\n")
+		for _, o := range r.DeepInspects {
+			fmt.Fprintf(&b, "### Hypothesis %d: %s\n\n", o.Hypothesis.Index, o.Hypothesis.Title)
+			if o.Failed {
+				fmt.Fprintf(&b, "_DEEPINSPECT failed: %s_\n\n", o.FailReason)
+			} else {
+				fmt.Fprintf(&b, "_DEEPINSPECT: %s_\n\n", approvalLabel(o.FeedbackApproved))
+				if len(o.ToolsCalled) > 0 {
+					fmt.Fprintf(&b, "_Tools used: %s_\n\n", strings.Join(o.ToolsCalled, ", "))
+				}
+				content := strings.TrimSpace(o.Content)
+				if content != "" {
+					b.WriteString("<details><summary>Full analysis</summary>\n\n")
+					b.WriteString(content)
+					b.WriteString("\n\n</details>\n\n")
+				}
+			}
+		}
 	}
+
 	return b.String()
+}
+
+func countOutcomes(outcomes []pipeline.DeepInspectOutcome) (approved, failed int) {
+	for _, o := range outcomes {
+		if o.Failed {
+			failed++
+		} else {
+			approved++
+		}
+	}
+	return
+}
+
+func approvalLabel(approved bool) string {
+	if approved {
+		return "FEEDBACK APPROVED"
+	}
+	return "feedback not run"
 }
 
 func sanitizeFilename(s string) string {

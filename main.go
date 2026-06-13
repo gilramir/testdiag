@@ -5,8 +5,12 @@
 //	testdiag [flags] <jenkins-build-url>
 //
 // It fetches the build's test report (appending /api/json), finds every failed
-// test, and for each one asks an LLM — equipped with workspace file-reading
-// tools — to determine the root cause, writing one Markdown report per failure.
+// test, and runs each through a pipeline:
+//
+//	DOWNLOAD → LOGPARSE → FEEDBACK → HYPOTHESIZE → FEEDBACK →
+//	[DEEPINSPECT → FEEDBACK] × N → COMBINE → FEEDBACK
+//
+// writing one Markdown report per failure.
 package main
 
 import (
@@ -38,8 +42,7 @@ import (
 // diagnosis as project context.
 const backgroundFile = "TEST_AGENT.md"
 
-// options holds the parsed command-line arguments. Field names map to the
-// argparse switches/positional (e.g. the "url" positional -> URL via its Dest).
+// options holds the parsed command-line arguments.
 type options struct {
 	Output  string
 	Debug   bool
@@ -75,7 +78,7 @@ func run() error {
 	})
 	ap.Add(&argparse.Argument{
 		Switches: []string{"-v", "--verbose"},
-		Help:     "Log tool progress (e.g. when a whole-repo search_repo/find_files starts and finishes) to stderr",
+		Help:     "Log stage handoffs and tool progress to stderr",
 	})
 	ap.Add(&argparse.Argument{
 		Name: "url",
@@ -90,7 +93,6 @@ func run() error {
 		Help: "Only diagnose tests whose name contains any of these substrings " +
 			"(default: all failed tests)",
 	})
-	// Parse handles -h/--help and reports parse errors, exiting as appropriate.
 	ap.Parse()
 	buildURL := opts.URL
 
@@ -112,16 +114,14 @@ func run() error {
 
 	background := readBackground(ws.Root())
 
-	// Register the workspace file tools once, before any agent is built. Exclude
-	// the report output directory from tree searches so the agent never reads its
-	// own generated reports back in (the output dir often lives in the checkout).
+	// Register the workspace file tools once. Exclude the output directory from
+	// tree searches so the agent never reads its own generated reports.
 	tools.SetVerbose(opts.Verbose)
 	tools.ExcludeDir(filepath.Base(cfg.Output.Dir))
 	toolNames := tools.Register(ws)
 
-	// Resolve the LLM assigned to each stage. DEEPINSPECT gets the workspace
-	// source tools; LOGPARSE and FEEDBACK are tool-less passes over the log.
-	// FEEDBACK defaults to the LOGPARSE LLM when not explicitly assigned.
+	// Resolve LLMs. Only logparse and deepinspect are required; everything else
+	// falls back to a sensible default.
 	logparseLLM, err := cfg.LLMForStage(config.StageLogParse)
 	if err != nil {
 		return err
@@ -130,17 +130,19 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	feedbackLLM := logparseLLM // default: same endpoint as logparse
-	if spec, ok := cfg.LLMForStageOptional(config.StageLogParseFeedback); ok {
-		feedbackLLM = spec
-	}
 
-	// Front each stage's endpoint with the in-process proxy so models with
-	// differing native tool-call syntaxes (GPT-OSS, Gemma, Mistral, Nemotron) all
-	// work, and so the full conversation can be logged when debugging. This
-	// rewrites each LLM's BaseURL to a local proxy. DEEPINSPECT advertises the
-	// source tools (the log tools are withheld so the model can't re-read the raw
-	// log); LOGPARSE advertises none. Debug/verbose need the proxy too.
+	// Optional stage LLMs — fall back to logparse for tool-less stages.
+	hypothesizeLLM := fallbackLLM(cfg, config.StageHypothsize, logparseLLM)
+	combineLLM := fallbackLLM(cfg, config.StageCombine, logparseLLM)
+
+	// Feedback LLMs — each falls back to its primary stage's LLM.
+	logparseFBLLM := fallbackLLM(cfg, config.StageLogParseFeedback, logparseLLM)
+	hypothesizeFBLLM := fallbackLLM(cfg, config.StageHypothsizeFeedback, hypothesizeLLM)
+	deepinspectFBLLM := fallbackLLM(cfg, config.StageDeepInspectFeedback, deepinspectLLM)
+	combineFBLLM := fallbackLLM(cfg, config.StageCombineFeedback, combineLLM)
+
+	// Front each LLM with the in-process normalizing proxy. Stages sharing the
+	// same (endpoint, tool set) reuse one proxy instance.
 	pm := newProxyManager(cfg.Proxy, opts.Verbose)
 	defer pm.Close()
 	if pm.enabled() {
@@ -148,14 +150,21 @@ func run() error {
 		if cfg.Proxy.InjectTools {
 			deepTools = toProxyTools(tools.SchemasExcluding(tools.LogToolNames...))
 		}
+		// Tool-less stages share a proxy when they use the same endpoint.
+		for stageName, llmPtr := range map[string]*config.LLMSpec{
+			"logparse":             &logparseLLM,
+			"logparse_feedback":    &logparseFBLLM,
+			"hypothesize":          &hypothesizeLLM,
+			"hypothesize_feedback": &hypothesizeFBLLM,
+			"deepinspect_feedback": &deepinspectFBLLM,
+			"combine":              &combineLLM,
+			"combine_feedback":     &combineFBLLM,
+		} {
+			if *llmPtr, err = pm.front(stageName, *llmPtr, nil); err != nil {
+				return err
+			}
+		}
 		if deepinspectLLM, err = pm.front("deepinspect", deepinspectLLM, deepTools); err != nil {
-			return err
-		}
-		// LOGPARSE and FEEDBACK are tool-less passes; neither gets a tools array.
-		if logparseLLM, err = pm.front("logparse", logparseLLM, nil); err != nil {
-			return err
-		}
-		if feedbackLLM, err = pm.front("logparse_feedback", feedbackLLM, nil); err != nil {
 			return err
 		}
 	}
@@ -181,24 +190,60 @@ func run() error {
 		}
 	}
 
-	pl := pipeline.New(cfg, ws, logparseLLM, feedbackLLM, deepinspectLLM, background, opts.Verbose)
+	sc := &cfg.StageConfig
+	spec := pipeline.PipelineSpec{
+		LogParse: pipeline.StageSpec{
+			LLM:         logparseLLM,
+			FeedbackLLM: logparseFBLLM,
+		},
+		Hypothesize: pipeline.StageSpec{
+			LLM:         hypothesizeLLM,
+			FeedbackLLM: hypothesizeFBLLM,
+		},
+		DeepInspect: pipeline.StageSpec{
+			LLM:         deepinspectLLM,
+			FeedbackLLM: deepinspectFBLLM,
+		},
+		Combine: pipeline.StageSpec{
+			LLM:         combineLLM,
+			FeedbackLLM: combineFBLLM,
+		},
+	}
+	pl := pipeline.New(cfg, ws, spec, background, opts.Verbose)
 
 	fmt.Printf("Found %d failed test(s). Workspace: %s\n", len(failures), ws.Root())
 	fmt.Printf("Pipeline: %v\n", pl.States())
-	fmt.Printf("  LOGPARSE    -> %s (model %s)\n", logparseLLM.BaseURL, logparseLLM.Model)
-	if cfg.Diagnosis.MaxLogParseFeedbacks > 0 {
-		fmt.Printf("  FEEDBACK    -> %s (model %s, max %d rejection(s))\n",
-			feedbackLLM.BaseURL, feedbackLLM.Model, cfg.Diagnosis.MaxLogParseFeedbacks)
+	fmt.Printf("  LOGPARSE    -> %s (model %s, feedbacks=%d)\n",
+		logparseLLM.BaseURL, logparseLLM.Model, sc.LogParseMaxFeedbacks)
+	if cfg.Workspace.ArchitectureDoc != "" {
+		fmt.Printf("  HYPOTHESIZE -> %s (model %s, arch=%s, feedbacks=%d)\n",
+			hypothesizeLLM.BaseURL, hypothesizeLLM.Model,
+			cfg.Workspace.ArchitectureDoc, sc.HypothesizeMaxFeedbacks)
+	} else {
+		fmt.Printf("  HYPOTHESIZE -> %s (model %s, feedbacks=%d)\n",
+			hypothesizeLLM.BaseURL, hypothesizeLLM.Model, sc.HypothesizeMaxFeedbacks)
 	}
-	fmt.Printf("  DEEPINSPECT -> %s (model %s). Tools: %v\n", deepinspectLLM.BaseURL, deepinspectLLM.Model, toolNames)
+	fmt.Printf("  DEEPINSPECT -> %s (model %s, tools=%v, max_iters=%d, feedbacks=%d)\n",
+		deepinspectLLM.BaseURL, deepinspectLLM.Model, toolNames,
+		sc.DeepInspectMaxToolIterations, sc.DeepInspectMaxFeedbacks)
+	fmt.Printf("  COMBINE     -> %s (model %s, feedbacks=%d)\n",
+		combineLLM.BaseURL, combineLLM.Model, sc.CombineMaxFeedbacks)
 	fmt.Printf("Diagnosing one at a time; reports -> %s\n\n", cfg.Output.Dir)
 
 	return process(ctx, pl, failures, cfg.Output)
 }
 
-// process diagnoses failures one at a time, in order. Each test is independent,
-// but running them sequentially keeps the output (and the run_script approval
-// prompts) coherent for the operator rather than interleaving many at once.
+// fallbackLLM resolves the LLM for an optional stage, falling back to
+// fallback when the stage has no explicit assignment.
+func fallbackLLM(cfg *config.Config, stage string, fallback config.LLMSpec) config.LLMSpec {
+	if spec, ok := cfg.LLMForStageOptional(stage); ok {
+		return spec
+	}
+	return fallback
+}
+
+// process diagnoses failures one at a time, in order. Sequential execution
+// keeps the output and run_script approval prompts coherent for the operator.
 func process(ctx context.Context, pl *pipeline.Pipeline, failures []jenkins.FailedTest, out config.Output) error {
 	var failed, analyzed int
 
@@ -230,10 +275,7 @@ func process(ctx context.Context, pl *pipeline.Pipeline, failures []jenkins.Fail
 }
 
 // proxyManager starts at most one normalizing LLM proxy per distinct
-// (endpoint, advertised tool set) and rewrites each stage LLM's BaseURL to its
-// proxy. Two stages that share both an endpoint and a tool set share one proxy;
-// the same endpoint advertised with different tools (LOGPARSE: none,
-// DEEPINSPECT: source tools) gets a proxy each.
+// (endpoint, advertised tool set) and rewrites each stage LLM's BaseURL.
 type proxyManager struct {
 	cfg     config.Proxy
 	verbose bool
@@ -245,15 +287,10 @@ func newProxyManager(cfg config.Proxy, verbose bool) *proxyManager {
 	return &proxyManager{cfg: cfg, verbose: verbose, byKey: map[string]*llmproxy.Proxy{}}
 }
 
-// enabled reports whether any proxy is needed at all. With everything off the
-// stages talk to their real endpoints directly.
 func (m *proxyManager) enabled() bool {
 	return m.cfg.NormalizeToolCalls || m.cfg.Debug || m.verbose
 }
 
-// front ensures a proxy exists for spec's endpoint advertising proxyTools, then
-// returns spec with its BaseURL repointed at that proxy. stage labels the
-// startup log line.
 func (m *proxyManager) front(stage string, spec config.LLMSpec, proxyTools []llmproxy.Tool) (config.LLMSpec, error) {
 	key := spec.BaseURL + "\x00" + toolSig(proxyTools)
 	px, ok := m.byKey[key]
@@ -277,15 +314,12 @@ func (m *proxyManager) front(stage string, spec config.LLMSpec, proxyTools []llm
 	return spec, nil
 }
 
-// Close shuts down every started proxy.
 func (m *proxyManager) Close() {
 	for _, p := range m.proxies {
 		p.Close()
 	}
 }
 
-// toolSig is a stable signature of an advertised tool set so two stages with the
-// same endpoint and tools reuse one proxy.
 func toolSig(ts []llmproxy.Tool) string {
 	names := make([]string, 0, len(ts))
 	for _, t := range ts {
@@ -295,7 +329,6 @@ func toolSig(ts []llmproxy.Tool) string {
 	return strings.Join(names, ",")
 }
 
-// toProxyTools adapts workspace tool schemas to the proxy's Tool shape.
 func toProxyTools(schemas []tools.Schema) []llmproxy.Tool {
 	out := make([]llmproxy.Tool, 0, len(schemas))
 	for _, s := range schemas {
@@ -304,8 +337,6 @@ func toProxyTools(schemas []tools.Schema) []llmproxy.Tool {
 	return out
 }
 
-// filterTests keeps only tests whose full name contains at least one of the
-// given substrings (OR semantics). With no substrings it returns all tests.
 func filterTests(failures []jenkins.FailedTest, substrings []string) []jenkins.FailedTest {
 	var kept []jenkins.FailedTest
 	for _, t := range failures {
@@ -320,7 +351,6 @@ func filterTests(failures []jenkins.FailedTest, substrings []string) []jenkins.F
 	return kept
 }
 
-// readBackground loads TEST_AGENT.md from the workspace root if present.
 func readBackground(root string) string {
 	path := filepath.Join(root, backgroundFile)
 	data, err := os.ReadFile(path)
