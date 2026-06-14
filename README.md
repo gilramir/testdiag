@@ -40,7 +40,7 @@ Given a Jenkins build URL:
    | LESSONS | Meta-analysis of this testdiag run; developer-facing suggestions for improving prompts, tools, and stage design | — |
    | MEMORIZE | Extract durable codebase facts → `.testdiag/memory.md` | — |
 
-   *Workspace source tools* = `read_file`, `list_directory`, `count_lines`, `read_lines`, `grep`, `search_repo`, `find_files`, `run_script`, `notebook`. The raw-log tools (`read_log`, `grep_log`) are withheld from both PLANINSPECTION and DEEPINSPECT; those stages work from the brief alone.
+   *Workspace source tools* = `read_file`, `list_directory`, `file_exists`, `function_lookup`, `count_lines`, `read_lines`, `grep`, `search_repo`, `find_files`, `git_blame`, `git_log`, `run_script`, `notebook`. The raw-log tools (`read_log`, `grep_log`) are withheld from both PLANINSPECTION and DEEPINSPECT; those stages work from the brief alone. (In practice the inspect engine no longer advertises `notebook` — the fact tree is its working memory — but the tool still exists.)
 
    - **DOWNLOAD** — saves the test's full failure log under `.testdiag/logs/`.
    - **LOGPARSE** — one tool-less LLM pass over that log produces an
@@ -126,19 +126,26 @@ diagnosis engine advertises to the model as a `tools` entry. Every tool has hard
 output caps (file size, line span, match/entry/file counts) to protect the context
 window.
 
-| Tool | Purpose |
-|------|---------|
-| `read_file` | Read an entire (small) file |
-| `list_directory` | List a directory's entries |
-| `count_lines` | `wc -l` for one or more files |
-| `read_lines` | Read a single line or an inclusive range |
-| `grep` | Find matching lines (with numbers) in a file |
-| `search_repo` | Recursive grep across the tree |
-| `find_files` | Locate files by glob / substring |
-| `read_log` | Read the saved failure log (with `tail`) — **withheld from PLANINSPECTION and DEEPINSPECT** |
-| `grep_log` | Search the failure log (with context lines) — **withheld from PLANINSPECTION and DEEPINSPECT** |
-| `run_script` | Write + run a shell/Python script — **only after operator approval** |
-| `notebook` | Per-hypothesis Markdown scratchpad (`append` / `read`) the agent uses as working memory |
+Options below are listed **required first**, then optional ones with their
+defaults. All paths are workspace-relative.
+
+| Tool | Purpose | Options |
+|------|---------|---------|
+| `read_file` | Read an entire (small) file | `path` |
+| `list_directory` | List a directory's entries | `path` (use `.` for the workspace root) |
+| `file_exists` | Report whether a path exists and whether it is a file or a directory | `path` |
+| `function_lookup` | Find where a named function is defined (returns file + line) | `language`, `function_name`, `directories` (array) |
+| `count_lines` | `wc -l` for one or more files | `paths` (array) |
+| `read_lines` | Read a single line or an inclusive range | `path`, `start`; `end` (defaults to `start`) |
+| `grep` | Find matching lines (with numbers) in one file | `path`, `pattern`; `case_sensitive` (default `false`) |
+| `search_repo` | Recursive grep across the tree (cached, paginated) | `regex`; `path` (default `.`), `include_glob`, `case_sensitive` (default `false`), `offset`, `limit` |
+| `find_files` | Locate files by glob / substring; on a miss, returns same-named files elsewhere | `pattern`; `path` (default `.`), `case_sensitive` (default `false`) |
+| `git_blame` | Blame a line range to find when/why a line last changed | `path`; `start`, `end` (default: a small window from `start`) |
+| `git_log` | Recent commits touching a file or directory | `path` (default: whole repo), `limit` (default), `patch` (default `false`) |
+| `read_log` | Read the saved failure log — **withheld from PLANINSPECTION and DEEPINSPECT** | `path`; `tail` (last N lines) |
+| `grep_log` | Search the failure log with context — **withheld from PLANINSPECTION and DEEPINSPECT** | `path`, `pattern`; `context` (lines each side, default), `ignore_case` (default `false`) |
+| `run_script` | Write + run a shell/Python script — **only after operator approval** | `language` (shell or Python 3), `script` |
+| `notebook` | Per-hypothesis Markdown scratchpad (working memory) | `action` (`append` / `read`); `note` (required when appending) |
 
 The two log tools are not advertised to PLANINSPECTION or DEEPINSPECT and are
 hard-disabled while either runs, so neither can re-read the raw log — both work from
