@@ -151,7 +151,7 @@ Output nothing else.`
 const deepInspectFeedbackPrompt = `You are a code investigation reviewer. You will be shown an analysis produced by a deep-inspection agent that investigated one specific hypothesis about a flaky test failure. Assess whether the analysis is adequate.
 
 A good DEEPINSPECT analysis must satisfy ALL FOUR criteria:
-1. State a clear verdict: CONFIRMED, REFUTED, or INCONCLUSIVE.
+1. The ## Verdict section must begin with exactly one of the words CONFIRMED, REFUTED, or INCONCLUSIVE (in all caps). An absent, ambiguous, or hedged verdict fails this criterion.
 2. Cite real file paths and line numbers from the workspace (not just prose assertions).
 3. Identify or rule out the specific nondeterministic condition described in the hypothesis.
 4. Provide enough evidence that a human engineer can independently verify the conclusion.

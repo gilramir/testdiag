@@ -39,11 +39,17 @@ You have read-only tools to explore the workspace:
 
 Tool paths are always WORKSPACE-RELATIVE. Never pass an absolute path.
 
+REQUIRED: you MUST end your investigation with one of exactly three verdicts for the hypothesis:
+- **CONFIRMED** — the evidence shows the hypothesis explains the failure.
+- **REFUTED** — the evidence rules it out.
+- **INCONCLUSIVE** — you could not gather enough evidence to decide either way.
+Do not finish without committing to one of these three words.
+
 When finished, STOP calling tools and reply with your final analysis as Markdown with exactly these sections:
 ## Hypothesis
 State the hypothesis you investigated.
 ## Verdict
-CONFIRMED, REFUTED, or INCONCLUSIVE — with one sentence explaining why.
+Must be the single word CONFIRMED, REFUTED, or INCONCLUSIVE followed by one sentence explaining why.
 ## Evidence
 Real file paths and line numbers you read, on both sides of any boundary.
 ## Mechanism
