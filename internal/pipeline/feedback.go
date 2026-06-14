@@ -31,7 +31,9 @@ func newFeedbackChecker(llm config.LLMSpec, systemPrompt string) *feedbackChecke
 // Check assesses output against the stage's quality criteria. It returns
 // ok=true when the output is acceptable, or ok=false with a critique that
 // names exactly what is missing or wrong so the stage can retry.
-func (f *feedbackChecker) Check(ctx context.Context, test jenkins.FailedTest, output string) (ok bool, critique string, err error) {
+// toolLog is the formatted tool-call log from the stage that produced output;
+// pass an empty string for tool-less stages.
+func (f *feedbackChecker) Check(ctx context.Context, test jenkins.FailedTest, output string, toolLog string) (ok bool, critique string, err error) {
 	name := "feedback-" + sanitize(test.FullName())
 	agent, err := vnext.NewBuilder(name).
 		WithConfig(&vnext.Config{
@@ -54,7 +56,7 @@ func (f *feedbackChecker) Check(ctx context.Context, test jenkins.FailedTest, ou
 		return false, "", fmt.Errorf("building feedback agent: %w", err)
 	}
 
-	r, err := agent.Run(ctx, buildFeedbackPrompt(test, output))
+	r, err := agent.Run(ctx, buildFeedbackPrompt(test, output, toolLog))
 	if err != nil {
 		return false, "", fmt.Errorf("feedback agent run: %w", err)
 	}
@@ -76,12 +78,18 @@ func (f *feedbackChecker) Check(ctx context.Context, test jenkins.FailedTest, ou
 	return false, critique, nil
 }
 
-func buildFeedbackPrompt(test jenkins.FailedTest, stageOutput string) string {
+func buildFeedbackPrompt(test jenkins.FailedTest, stageOutput string, toolLog string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Review the following output for the failing test **%s**.\n\n", test.FullName())
 	b.WriteString("## Output to review\n\n")
 	b.WriteString(strings.TrimSpace(stageOutput))
-	b.WriteString("\n\n---\n\n")
+	b.WriteString("\n\n")
+	if strings.TrimSpace(toolLog) != "" {
+		b.WriteString("## Tool calls made during this stage\n\n")
+		b.WriteString(strings.TrimSpace(toolLog))
+		b.WriteString("\n\n")
+	}
+	b.WriteString("---\n\n")
 	b.WriteString("Does this output satisfy all required criteria? Respond with APPROVED or NEEDS REVISION: <critique>.")
 	return b.String()
 }
@@ -125,9 +133,15 @@ A good inspection plan must satisfy ALL THREE criteria:
 2. Each entry explains WHY the file is relevant to the specific hypothesis — not just "this is a source file."
 3. Entries are prioritized so the most critical files appear first.
 
+A tool call log may be provided showing what the planning agent actually searched. When present, also assess:
+- Whether the file paths in the plan were actually located by the tool calls (not just guessed from the brief).
+- Whether tool calls surfaced candidate files that the plan omitted without explanation.
+- Whether the search patterns used were appropriate for the hypothesis (e.g., searched for the right symbols, paths, or keywords).
+Cite specific tool call numbers in your critique when the log reveals a gap.
+
 Respond with EXACTLY ONE of:
-- The single word APPROVED if all three criteria are met, OR
-- NEEDS REVISION: followed by a concise bulleted list of exactly what is missing or unclear.
+- The single word APPROVED if all criteria are met, OR
+- NEEDS REVISION: followed by a concise bulleted list of exactly what is missing or unclear (cite tool call numbers when relevant).
 
 Output nothing else.`
 
@@ -140,9 +154,16 @@ A good DEEPINSPECT analysis must satisfy ALL FOUR criteria:
 3. Identify or rule out the specific nondeterministic condition described in the hypothesis.
 4. Provide enough evidence that a human engineer can independently verify the conclusion.
 
+A tool call log may be provided showing what the deep-inspection agent actually read. When present, also assess:
+- Whether the agent read the files it cited as evidence (cross-check citations against the log).
+- Whether tool results that pointed to a relevant code path were followed up or dropped.
+- Whether the verdict is consistent with what the tool calls actually surfaced (e.g., CONFIRMED without reading the relevant file is suspect).
+- Whether the investigation stopped too early — if the log shows only a few reads before the conclusion, the evidence may be shallow.
+Cite specific tool call numbers in your critique when the log reveals a gap.
+
 Respond with EXACTLY ONE of:
 - The single word APPROVED if all four criteria are met, OR
-- NEEDS REVISION: followed by a concise bulleted list of exactly what is missing or unclear.
+- NEEDS REVISION: followed by a concise bulleted list of exactly what is missing or unclear (cite tool call numbers when relevant).
 
 Output nothing else.`
 

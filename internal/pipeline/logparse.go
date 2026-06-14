@@ -75,7 +75,7 @@ func (s *logParseStage) Run(ctx context.Context, sc *Context) error {
 			return s.saveBrief(sc, brief)
 		}
 
-		ok, newCritique, err := s.feedback.Check(ctx, sc.Test, brief)
+		ok, newCritique, err := s.feedback.Check(ctx, sc.Test, brief, "")
 		if err != nil {
 			return fmt.Errorf("feedback: %w", err)
 		}

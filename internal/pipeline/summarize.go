@@ -64,7 +64,7 @@ func (s *summarizeStage) Run(ctx context.Context, sc *Context) error {
 			return s.save(sc, content)
 		}
 
-		ok, newCritique, err := s.feedback.Check(ctx, sc.Test, content)
+		ok, newCritique, err := s.feedback.Check(ctx, sc.Test, content, "")
 		if err != nil {
 			return fmt.Errorf("feedback: %w", err)
 		}

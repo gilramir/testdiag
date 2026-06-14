@@ -41,6 +41,18 @@ func CollectToolLog() []ToolCall {
 	return out
 }
 
+// PeekToolLog returns a snapshot of all tool calls recorded since the last
+// ResetToolLog without clearing the log. Use this when you need to observe
+// accumulated calls mid-run (e.g., to pass to a feedback stage) while still
+// letting the outer CollectToolLog drain everything at the end.
+func PeekToolLog() []ToolCall {
+	toolLogMu.Lock()
+	defer toolLogMu.Unlock()
+	out := make([]ToolCall, len(toolLogCalls))
+	copy(out, toolLogCalls)
+	return out
+}
+
 // appendToolCall records one completed tool invocation.
 func appendToolCall(name string, args map[string]interface{}, content interface{}, failed bool) {
 	var summary string

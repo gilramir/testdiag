@@ -12,6 +12,12 @@ import (
 	"github.com/gilbertr/testdiag/internal/workspace"
 )
 
+// peekToolLog returns the current tool call log formatted as Markdown,
+// without draining it so the outer CollectToolLog still captures everything.
+func peekToolLog() string {
+	return tools.FormatToolLog(tools.PeekToolLog())
+}
+
 // planInspectAllStage runs one PLANINSPECTION+FEEDBACK pass per hypothesis
 // from HYPOTHESIZE. A hypothesis whose plan fails is recorded as a failed
 // outcome and does NOT stop the pipeline — DEEPINSPECT will work from the
@@ -96,7 +102,7 @@ func (s *planInspectAllStage) runOne(ctx context.Context, sc *Context, h Hypothe
 			return s.save(sc, h, out)
 		}
 
-		ok, newCritique, err := s.feedback.Check(ctx, sc.Test, res.Content)
+		ok, newCritique, err := s.feedback.Check(ctx, sc.Test, res.Content, peekToolLog())
 		if err != nil {
 			out.Failed = true
 			out.FailReason = fmt.Sprintf("feedback error: %v", err)

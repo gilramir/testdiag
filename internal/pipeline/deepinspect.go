@@ -101,7 +101,7 @@ func (s *deepInspectAllStage) runOne(ctx context.Context, sc *Context, h Hypothe
 			return s.save(sc, h, out)
 		}
 
-		ok, newCritique, err := s.feedback.Check(ctx, sc.Test, res.Content)
+		ok, newCritique, err := s.feedback.Check(ctx, sc.Test, res.Content, peekToolLog())
 		if err != nil {
 			// A feedback error on a hypothesis is non-fatal: mark as failed.
 			out.Failed = true

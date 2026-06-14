@@ -79,7 +79,7 @@ func (s *hypothesizeStage) Run(ctx context.Context, sc *Context) error {
 			return s.save(sc, content, hypotheses)
 		}
 
-		ok, newCritique, err := s.feedback.Check(ctx, sc.Test, content)
+		ok, newCritique, err := s.feedback.Check(ctx, sc.Test, content, "")
 		if err != nil {
 			return fmt.Errorf("feedback: %w", err)
 		}
