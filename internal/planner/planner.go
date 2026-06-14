@@ -80,6 +80,7 @@ func (p *Planner) Plan(ctx context.Context, input PlanInput) (Result, error) {
 
 	tools.ResetLoopGuard()
 	tools.ResetSearchCache()
+	tools.ResetFindFilesCache()
 	r, err := agent.Run(ctx, buildUserPrompt(input, m, p.background, p.memory))
 	if err != nil {
 		return Result{}, fmt.Errorf("plan agent run for %s: %w", input.Test.FullName(), err)

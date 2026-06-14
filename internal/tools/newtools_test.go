@@ -253,6 +253,82 @@ func TestFindFiles(t *testing.T) {
 	}
 }
 
+func TestFindFilesNegativeCache(t *testing.T) {
+	ws, _ := setupWS(t)
+	ResetFindFilesCache()
+	t.Cleanup(ResetFindFilesCache)
+	tool := &findFilesTool{ws: ws}
+
+	// First call: pattern that matches nothing → walks the tree, gets 0 results.
+	res, err := tool.Execute(context.Background(), map[string]interface{}{"pattern": "*_does_not_exist.java"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := res.Content.(map[string]interface{})
+	if c["count"].(int) != 0 {
+		t.Fatalf("want 0 results, got %v", c["count"])
+	}
+	if _, cached := c["no_results_cached"]; cached {
+		t.Error("first call should not carry no_results_cached")
+	}
+
+	// Second call with same pattern → served from cache with the don't-retry message.
+	res2, err := tool.Execute(context.Background(), map[string]interface{}{"pattern": "*_does_not_exist.java"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c2 := res2.Content.(map[string]interface{})
+	if c2["count"].(int) != 0 {
+		t.Fatalf("cached call: want 0 results, got %v", c2["count"])
+	}
+	if c2["no_results_cached"] != true {
+		t.Error("second call should set no_results_cached=true")
+	}
+	if msg, _ := c2["message"].(string); msg == "" {
+		t.Error("second call should include a non-empty message")
+	}
+
+	// A different pattern is not affected by the cache.
+	res3, err := tool.Execute(context.Background(), map[string]interface{}{"pattern": "*_client.py"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res3.Content.(map[string]interface{})["count"].(int) != 1 {
+		t.Error("different pattern should still find files")
+	}
+
+	// After ResetFindFilesCache the first pattern should walk again (no cached flag).
+	ResetFindFilesCache()
+	res4, _ := tool.Execute(context.Background(), map[string]interface{}{"pattern": "*_does_not_exist.java"})
+	if _, cached := res4.Content.(map[string]interface{})["no_results_cached"]; cached {
+		t.Error("after reset, call should not be served from cache")
+	}
+}
+
+func TestFindFilesPositiveCache(t *testing.T) {
+	ws, _ := setupWS(t)
+	ResetFindFilesCache()
+	t.Cleanup(ResetFindFilesCache)
+	tool := &findFilesTool{ws: ws}
+
+	// First call populates the cache.
+	res1, _ := tool.Execute(context.Background(), map[string]interface{}{"pattern": "*_client.py"})
+	// Second call hits the cache; result must be identical and carry no error message.
+	res2, err := tool.Execute(context.Background(), map[string]interface{}{"pattern": "*_client.py"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c2 := res2.Content.(map[string]interface{})
+	if _, bad := c2["no_results_cached"]; bad {
+		t.Error("positive cache hit must not set no_results_cached")
+	}
+	p1 := res1.Content.(map[string]interface{})["paths"].([]string)
+	p2 := c2["paths"].([]string)
+	if len(p1) != len(p2) || (len(p1) > 0 && p1[0] != p2[0]) {
+		t.Errorf("cached result differs: %v vs %v", p1, p2)
+	}
+}
+
 func TestFindFilesRefusesLogHuntWhenWithheld(t *testing.T) {
 	ws, _ := setupWS(t)
 	tool := &findFilesTool{ws: ws}

@@ -272,6 +272,40 @@ func logHuntQuery(args map[string]interface{}) string {
 }
 
 // ---------------------------------------------------------------------------
+// find_files result cache (negative entries)
+// ---------------------------------------------------------------------------
+
+// findFilesCacheEntry holds the result of one find_files walk so that a
+// repeated call with the same arguments can skip the walk entirely. Empty
+// entries (no files matched) are specifically worth caching because the LLM
+// often retries the same pattern after getting no results.
+type findFilesCacheEntry struct {
+	paths     []string
+	truncated bool
+}
+
+var (
+	findFilesCacheMu    sync.Mutex
+	findFilesCacheStore = map[string]*findFilesCacheEntry{}
+)
+
+func findFilesCacheKey(pattern, base string, ignoreCase bool) string {
+	ic := "0"
+	if ignoreCase {
+		ic = "1"
+	}
+	return pattern + "\x00" + base + "\x00" + ic
+}
+
+// ResetFindFilesCache discards all cached find_files results. Call at the
+// start of each agent run alongside ResetSearchCache and ResetLoopGuard.
+func ResetFindFilesCache() {
+	findFilesCacheMu.Lock()
+	findFilesCacheStore = map[string]*findFilesCacheEntry{}
+	findFilesCacheMu.Unlock()
+}
+
+// ---------------------------------------------------------------------------
 // find_files (locate files by name / glob across the tree)
 // ---------------------------------------------------------------------------
 
@@ -279,7 +313,7 @@ type findFilesTool struct{ ws *workspace.Workspace }
 
 func (t *findFilesTool) Name() string { return "find_files" }
 func (t *findFilesTool) Description() string {
-	return "Find files in the workspace whose name matches a glob (e.g. *Test.java, foo_client.py) or whose path contains a substring. Returns workspace-relative paths. Use this to locate a test's source file instead of crawling directories by hand."
+	return "Find files in the workspace whose name matches a glob (e.g. *Test.java, foo_client.py) or whose path contains a substring. Returns workspace-relative paths. Use this to locate a test's source file instead of crawling directories by hand. Results are cached: if a pattern previously returned no files, a repeat call will immediately tell you so — do not retry the same pattern."
 }
 func (t *findFilesTool) JSONSchema() map[string]interface{} {
 	return map[string]interface{}{
@@ -310,11 +344,37 @@ func (t *findFilesTool) Execute(ctx context.Context, args map[string]interface{}
 	if p, ok := strArg(args, "path"); ok {
 		base = p
 	}
+	ci := boolArg(args, "ignore_case")
+
+	// Check the cache before resolving the path or walking the tree.
+	cacheKey := findFilesCacheKey(pattern, base, ci)
+	findFilesCacheMu.Lock()
+	cached, hit := findFilesCacheStore[cacheKey]
+	findFilesCacheMu.Unlock()
+
+	if hit {
+		if len(cached.paths) == 0 {
+			return ok(map[string]interface{}{
+				"paths":            []string{},
+				"count":            0,
+				"truncated":        false,
+				"no_results_cached": true,
+				"message": "No files matched this pattern in a previous search. " +
+					"The workspace does not contain files matching this pattern — " +
+					"do not retry with the same arguments; try a different pattern instead.",
+			}), nil
+		}
+		return ok(map[string]interface{}{
+			"paths":     cached.paths,
+			"count":     len(cached.paths),
+			"truncated": cached.truncated,
+		}), nil
+	}
+
 	root, err := t.ws.Resolve(base)
 	if err != nil {
 		return fail("find_files: %v", err)
 	}
-	ci := boolArg(args, "ignore_case")
 
 	var paths []string
 	filesScanned := 0
@@ -352,6 +412,11 @@ func (t *findFilesTool) Execute(ctx context.Context, args map[string]interface{}
 		return fail("find_files: %v", ctx.Err())
 	}
 	sort.Strings(paths)
+
+	// Store result in cache (including empty results — that's the main point).
+	findFilesCacheMu.Lock()
+	findFilesCacheStore[cacheKey] = &findFilesCacheEntry{paths: paths, truncated: truncated}
+	findFilesCacheMu.Unlock()
 
 	return ok(map[string]interface{}{
 		"paths":     paths,
