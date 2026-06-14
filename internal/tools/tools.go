@@ -436,9 +436,32 @@ func (t *listDirTool) Execute(ctx context.Context, args map[string]interface{}) 
 	if err != nil {
 		return fail("list_directory: %v", err)
 	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		msg := "no such directory"
+		if !os.IsNotExist(err) {
+			msg = err.Error()
+		}
+		return ok(map[string]interface{}{
+			"path":    path,
+			"entries": []string{},
+			"error":   msg,
+		}), nil
+	}
+	if !info.IsDir() {
+		return ok(map[string]interface{}{
+			"path":    path,
+			"entries": []string{},
+			"error":   "not a directory — use read_file to read its contents",
+		}), nil
+	}
 	entries, err := os.ReadDir(abs)
 	if err != nil {
-		return fail("list_directory: %v", err)
+		return ok(map[string]interface{}{
+			"path":    path,
+			"entries": []string{},
+			"error":   err.Error(),
+		}), nil
 	}
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
