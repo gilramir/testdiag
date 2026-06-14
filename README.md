@@ -276,6 +276,12 @@ testdiag https://jenkins.example.com/job/myapp/1234/ LoginTest
 # the next stage (useful for reviewing intermediate results).
 testdiag -v https://jenkins.example.com/job/myapp/1234/
 testdiag -p https://jenkins.example.com/job/myapp/1234/
+
+# By default testdiag assumes the failure is FLAKY (intermittent) and steers every
+# stage toward nondeterministic causes (races, timing, ordering). If the test
+# actually fails on EVERY run, pass --always-fails so the stages instead hunt for a
+# deterministic defect or recent regression.
+testdiag --always-fails https://jenkins.example.com/job/myapp/1234/
 ```
 
 ## Test → source-file mapping

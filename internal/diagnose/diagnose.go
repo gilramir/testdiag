@@ -22,6 +22,7 @@ import (
 	vnext "github.com/agenticgokit/agenticgokit/v1beta"
 
 	"github.com/gilbertr/testdiag/internal/config"
+	"github.com/gilbertr/testdiag/internal/failmode"
 	"github.com/gilbertr/testdiag/internal/jenkins"
 	"github.com/gilbertr/testdiag/internal/mapping"
 	"github.com/gilbertr/testdiag/internal/tools"
@@ -54,23 +55,25 @@ type Result struct {
 type Diagnoser struct {
 	ws                *workspace.Workspace
 	llm               config.LLMSpec
-	background        string // contents of TEST_AGENT.md
-	memory            string // contents of .testdiag/memory.md (may be empty)
+	mode              failmode.Mode // flaky (default) vs always-fails
+	background        string        // contents of TEST_AGENT.md
+	memory            string        // contents of .testdiag/memory.md (may be empty)
 	maxToolIterations int
 	mapper            string // path to test→source mapper executable; may be empty
 	drainFn           func() // called at the start of each Diagnose(); may be nil
 }
 
 // New creates a Diagnoser. llm is the LLM assigned to the DEEPINSPECT stage;
+// mode selects flaky vs always-fails framing;
 // background is the TEST_AGENT.md content (may be "");
 // memory is the contents of .testdiag/memory.md (may be "");
 // maxToolIterations caps the tool-calling loop per attempt;
 // mapper is the optional path to the test→source mapping executable;
 // drainFn, if non-nil, is called before each attempt to discard any queued
 // operator messages that arrived between hypothesis runs.
-func New(ws *workspace.Workspace, llm config.LLMSpec, background, memory string, maxToolIterations int, mapper string, drainFn func()) *Diagnoser {
+func New(ws *workspace.Workspace, llm config.LLMSpec, mode failmode.Mode, background, memory string, maxToolIterations int, mapper string, drainFn func()) *Diagnoser {
 	return &Diagnoser{
-		ws: ws, llm: llm, background: background, memory: memory,
+		ws: ws, llm: llm, mode: mode, background: background, memory: memory,
 		maxToolIterations: maxToolIterations, mapper: mapper,
 		drainFn: drainFn,
 	}
@@ -101,7 +104,7 @@ func (d *Diagnoser) Diagnose(ctx context.Context, input DiagnoseInput) (Result, 
 	tools.SetLogToolsEnabled(false)
 	defer tools.SetLogToolsEnabled(true)
 
-	agent, err := d.buildAgent(input)
+	agent, err := d.buildAgent(input, m)
 	if err != nil {
 		return Result{}, fmt.Errorf("building agent for %s: %w", input.Test.FullName(), err)
 	}
@@ -109,7 +112,7 @@ func (d *Diagnoser) Diagnose(ctx context.Context, input DiagnoseInput) (Result, 
 	tools.ResetLoopGuard()
 	tools.ResetSearchCache()
 	tools.ResetFindFilesCache()
-	r, err := agent.Run(ctx, buildUserPrompt(input, m, d.background, d.memory))
+	r, err := agent.Run(ctx, buildUserPrompt(input, d.background, d.memory))
 	if err != nil {
 		return Result{}, fmt.Errorf("agent run for %s: %w", input.Test.FullName(), err)
 	}
@@ -145,16 +148,17 @@ func uniqueToolNames(r *vnext.Result) []string {
 // registered internal tools attach via Tools.Enabled alone (DiscoverInternalTools),
 // and presets would clobber SystemPrompt/Temperature and re-enable memory.
 //
-// The brief and hypothesis are in the system prompt (not only the user message)
-// because AGK's continuation loop preserves System across every tool iteration
-// but replaces User with "Previous response + tool results" after the first
-// round-trip.
-func (d *Diagnoser) buildAgent(input DiagnoseInput) (vnext.Agent, error) {
+// The brief, hypothesis, inspection plan, and mapped source file all go in the
+// system prompt (not only the user message) because AGK's continuation loop
+// preserves System across every tool iteration but replaces User with "Previous
+// response + tool results" after the first round-trip — so anything left only in
+// the user message is forgotten after the agent's first tool call.
+func (d *Diagnoser) buildAgent(input DiagnoseInput, m mapping.Result) (vnext.Agent, error) {
 	name := fmt.Sprintf("diagnose-%s-h%d", sanitize(input.Test.FullName()), input.HypothesisIndex)
 	return vnext.NewBuilder(name).
 		WithConfig(&vnext.Config{
 			Name:         name,
-			SystemPrompt: buildSystemPrompt(input.Brief, input.Hypothesis, d.maxToolIterations),
+			SystemPrompt: buildSystemPrompt(d.mode, input.Brief, input.Hypothesis, input.Plan, m.SourceFile, d.maxToolIterations),
 			LLM: vnext.LLMConfig{
 				Provider:    d.llm.Provider,
 				Model:       d.llm.Model,

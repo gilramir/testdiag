@@ -32,6 +32,7 @@ import (
 
 	"github.com/gilbertr/testdiag/internal/config"
 	"github.com/gilbertr/testdiag/internal/distill"
+	"github.com/gilbertr/testdiag/internal/failmode"
 	"github.com/gilbertr/testdiag/internal/jenkins"
 	"github.com/gilbertr/testdiag/internal/llmproxy"
 	"github.com/gilbertr/testdiag/internal/pipeline"
@@ -50,12 +51,13 @@ const memoryFile = ".testdiag/memory.md"
 
 // options holds the parsed command-line arguments.
 type options struct {
-	Output  string
-	Debug   bool
-	Verbose bool
-	Pause   bool
-	URL     string
-	Filters []string
+	Output      string
+	Debug       bool
+	Verbose     bool
+	Pause       bool
+	AlwaysFails bool
+	URL         string
+	Filters     []string
 }
 
 func main() {
@@ -86,6 +88,11 @@ func main() {
 	ap.Add(&argparse.Argument{
 		Switches: []string{"-p", "--pause"},
 		Help:     "Pause after each stage handoff; implies printing the handoff even without -v",
+	})
+	ap.Add(&argparse.Argument{
+		Switches: []string{"--always-fails"},
+		Help: "Treat the failure as deterministic (the test fails on every run) rather than " +
+			"flaky/intermittent; steers every stage toward deterministic root causes",
 	})
 	ap.Add(&argparse.Argument{
 		Name: "url",
@@ -257,10 +264,12 @@ func run(opts *options) error {
 			fmt.Fprintln(os.Stdout)
 		}
 	}
-	pl := pipeline.New(cfg, ws, spec, background, memory, opts.Verbose, ic.Drain, pauseFn)
+	mode := failmode.Mode{AlwaysFails: opts.AlwaysFails}
+	pl := pipeline.New(cfg, ws, spec, mode, background, memory, opts.Verbose, ic.Drain, pauseFn)
 	distiller := distill.New(ws, memorizeLLM)
 
 	fmt.Printf("Found %d failed test(s). Workspace: %s\n", len(failures), ws.Root())
+	fmt.Printf("Failure mode: %s\n", mode.ShortLabel())
 	fmt.Printf("Pipeline: %v\n", pl.States())
 	fmt.Printf("  LOGPARSE    -> %s (model %s, feedbacks=%d)\n",
 		logparseLLM.BaseURL, logparseLLM.Model, sc.LogParseMaxFeedbacks)

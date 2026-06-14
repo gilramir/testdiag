@@ -15,7 +15,7 @@ SUMMARIZE → FEEDBACK → LESSONS
 ```
 
 - **DOWNLOAD** — save the raw failure log to disk
-- **LOGPARSE** — tool-less LLM pass that distils the log into an investigation brief
+- **LOGPARSE** — tool-less LLM pass that distils the **entire** log into an investigation brief (the whole log is inlined, not just head+tail, since later lines often carry the decisive clue; only a log that would overflow the model's context window is trimmed)
 - **FEEDBACK** — tool-less LLM gate: accepts the brief or rejects it with a critique; LOGPARSE retries with the critique up to `logparse_max_feedbacks` times
 - **HYPOTHESIZE** — tool-less LLM pass that reads the brief plus an optional architecture document and produces a ranked list of 1–N hypotheses; 0 hypotheses abandons the test
 - **FEEDBACK** — gate on the hypothesis list (`hypothesize_max_feedbacks`)
@@ -61,7 +61,17 @@ The pipeline is sequential: fetch failures → run each failure through the stag
   LLMs for optional stages (HYPOTHESIZE, SUMMARIZE, LESSONS, and all feedback stages)
   fall back to the logparse LLM when not explicitly configured. Each failed test is fully
   independent (no shared agent state); sequential execution keeps output and
-  `run_script` approval prompts coherent for the operator.
+  `run_script` approval prompts coherent for the operator. The `--always-fails`
+  flag builds a `failmode.Mode{AlwaysFails: true}` and threads it into
+  `pipeline.New`; without it the default is a flaky test.
+
+- **`internal/failmode`** — a tiny package describing whether the failure is
+  flaky (intermittent — the default) or `AlwaysFails` (deterministic, every run).
+  `Mode` exposes framing strings (`Description`, `CausePrior`, `ConditionGuidance`,
+  `MechanismLabel`, `FeedbackConditionCriterion`, `ShortLabel`) that LOGPARSE,
+  HYPOTHESIZE, and DEEPINSPECT (plus their feedback gates) inject into their
+  prompts, so a flaky run is steered toward nondeterminism (races/timing) while an
+  `--always-fails` run is steered toward deterministic defects and regressions.
 
 - **`internal/config`** — Two-level TOML config, then `TESTDIAG_*` env vars (env
   always wins). `Load()` bootstraps the workspace root before reading any file:
@@ -146,8 +156,10 @@ The pipeline is sequential: fetch failures → run each failure through the stag
 - **`internal/tools`** — the read-only tools exposed to the model, all jailed to
   the workspace: single-file (`read_file`, `list_directory`, `count_lines`,
   `read_lines`, `grep`), tree-wide (`search_repo` recursive grep, `find_files`
-  glob/substring locate), and log-oriented (`read_log` with `tail`, `grep_log` with
-  context lines). They implement `v1beta.Tool` with a `JSONSchema()` so the provider
+  glob/substring locate), history (`git_blame` line-range blame, `git_log` recent
+  commits with optional `--patch` — both shell out to `git` with the workspace
+  root as CWD and are output-capped; used to spot recent regressions), and
+  log-oriented (`read_log` with `tail`, `grep_log` with context lines). They implement `v1beta.Tool` with a `JSONSchema()` so the provider
   calls them natively. `Register(ws)` registers them **once at startup** via the global
   `vnext.RegisterInternalTool` before any agent is built, so each tool is a
   single shared, **stateless** instance reused across every test — never store
@@ -180,19 +192,25 @@ The pipeline is sequential: fetch failures → run each failure through the stag
   (`planinspect.go`, `deepinspect.go`) call `ResetToolLog()` before each hypothesis
   run and `CollectToolLog()` after, writing the result to the handoff directory.
 
-- **`internal/diagnose`** — the DEEPINSPECT engine. `Diagnoser.New(ws, llm,
-  background, maxToolIterations)` creates a diagnoser. `Diagnose(ctx, DiagnoseInput)`
-  accepts a `DiagnoseInput{Test, Brief, Hypothesis, HypothesisIndex, PrevResult,
-  Critique}`, maps the test (via `internal/mapping`), prepares a fresh per-hypothesis
-  notebook (`.testdiag/notes/<test>.h<N>.md`), hard-disables the log tools, builds
-  a fresh agent (memory disabled, reasoning loop enabled, capped at
-  `maxToolIterations`), and runs it once. When `PrevResult`+`Critique` are set, the
-  user message includes the prior draft and feedback so the retry goes deeper. The
-  `brief` and `hypothesis` are injected into the **system prompt** (not only the user
-  message) so they survive AGK's continuation loop, which drops the original user
-  message after the first tool round-trip and replaces it with "Previous response +
-  tool results". No internal critique/revise loop — that is now handled externally by
-  `deepInspectAllStage` + `feedbackChecker`.
+- **`internal/diagnose`** — the DEEPINSPECT engine. `Diagnoser.New(ws, llm, mode,
+  background, memory, maxToolIterations, mapper, drainFn)` creates a diagnoser.
+  `Diagnose(ctx, DiagnoseInput)` accepts a `DiagnoseInput{Test, Brief, Hypothesis,
+  HypothesisIndex, Plan, PrevResult, Critique}`, maps the test (via
+  `internal/mapping`), prepares a fresh per-hypothesis notebook
+  (`.testdiag/notes/<test>.h<N>.md`), hard-disables the log tools, builds a fresh
+  agent (memory disabled, reasoning loop enabled, capped at `maxToolIterations`),
+  and runs it once. When `PrevResult`+`Critique` are set, the user message includes
+  the prior draft and feedback so the retry goes deeper. The `brief`, `hypothesis`,
+  **inspection plan, and mapped source file** are all injected into the **system
+  prompt** (not only the user message) so they survive AGK's continuation loop,
+  which drops the original user message after the first tool round-trip and
+  replaces it with "Previous response + tool results" — leaving anything kept only
+  in the user message forgotten after the agent's first tool call. The system
+  prompt also (a) permits a serendipitous "## Alternative Cause Discovered" section
+  when the agent finds a real root cause outside its assigned hypothesis, and (b)
+  reframes the tool budget to verify both sides of the hypothesis boundary rather
+  than stop at the first plausible answer. No internal critique/revise loop — that
+  is handled externally by `deepInspectAllStage` + `feedbackChecker`.
 
 - **`internal/mapping`** — `MapTestToSource(mapperPath, workspaceRoot string, test)
   (Result, error)` runs the user-supplied mapper executable (`workspace.mapper` in

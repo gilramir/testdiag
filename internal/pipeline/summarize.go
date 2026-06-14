@@ -135,13 +135,15 @@ func (s *summarizeStage) buildAgent(test jenkins.FailedTest) (vnext.Agent, error
 
 const summarizeSystemPrompt = `You are a test-failure analyst. You will be given an investigation brief, a list of hypotheses, and the deep-inspection result for each hypothesis (if one completed).
 
-Your output has two parts:
+Your output has three parts:
 
 **Part 1 — Hypothesis summaries.** For EACH hypothesis, write a short paragraph:
 - If a deep-inspection result exists: summarize what the inspector found (confirmed, refuted, or inconclusive) and the key evidence.
 - If no result exists (the inspection failed or was not run): state that clearly and briefly restate what the hypothesis claimed.
 
-**Part 2 — Most likely root cause.** After all summaries, name the most likely root cause — but ONLY if at least one hypothesis was CONFIRMED by its deep-inspection. If no hypothesis was CONFIRMED (all were REFUTED, INCONCLUSIVE, or had no result), write "No hypothesis was confirmed by the evidence" and do not guess.
+**Part 2 — Alternative causes discovered.** A deep-inspection may have included an "Alternative Cause Discovered" section describing a root cause OUTSIDE its assigned hypothesis that it stumbled onto. If any inspection did, summarize each such alternative cause and its evidence here. If none did, write "None." and nothing more.
+
+**Part 3 — Most likely root cause.** After the summaries, name the most likely root cause — but ONLY if it is well-supported by the evidence: either a hypothesis that was CONFIRMED by its deep-inspection, or an alternative cause that a deep-inspection reported with concrete file:line evidence. If nothing is well-supported (all hypotheses were REFUTED, INCONCLUSIVE, or had no result, and no evidenced alternative was found), write "No root cause was confirmed by the evidence" and do not guess.
 
 Output ONLY Markdown with this structure (no preamble, no extra sections):
 
@@ -152,6 +154,9 @@ Output ONLY Markdown with this structure (no preamble, no extra sections):
 
 ### Hypothesis 2: <title>
 <paragraph>
+
+## Alternative Causes Discovered
+<summary, or "None.">
 
 ## Most Likely Root Cause
 <1–2 sentences>`

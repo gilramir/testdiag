@@ -12,6 +12,7 @@ import (
 	vnext "github.com/agenticgokit/agenticgokit/v1beta"
 
 	"github.com/gilbertr/testdiag/internal/config"
+	"github.com/gilbertr/testdiag/internal/failmode"
 	"github.com/gilbertr/testdiag/internal/jenkins"
 	"github.com/gilbertr/testdiag/internal/workspace"
 )
@@ -24,6 +25,7 @@ import (
 type hypothesizeStage struct {
 	ws           *workspace.Workspace
 	llm          config.LLMSpec
+	mode         failmode.Mode
 	archDocPath  string           // workspace-relative; may be empty
 	memory       string           // contents of .testdiag/memory.md (may be empty)
 	feedback     *feedbackChecker // nil when disabled
@@ -32,9 +34,9 @@ type hypothesizeStage struct {
 	pauseFn      func() // non-nil when -p is set; called after each handoff print
 }
 
-func newHypothesizeStage(ws *workspace.Workspace, llm config.LLMSpec, archDocPath, memory string, fb *feedbackChecker, maxFeedbacks int, verbose bool, pauseFn func()) *hypothesizeStage {
+func newHypothesizeStage(ws *workspace.Workspace, llm config.LLMSpec, mode failmode.Mode, archDocPath, memory string, fb *feedbackChecker, maxFeedbacks int, verbose bool, pauseFn func()) *hypothesizeStage {
 	return &hypothesizeStage{
-		ws: ws, llm: llm, archDocPath: archDocPath, memory: memory,
+		ws: ws, llm: llm, mode: mode, archDocPath: archDocPath, memory: memory,
 		feedback: fb, maxFeedbacks: maxFeedbacks, verbose: verbose, pauseFn: pauseFn,
 	}
 }
@@ -150,7 +152,7 @@ func (s *hypothesizeStage) buildAgent(test jenkins.FailedTest) (vnext.Agent, err
 	return vnext.NewBuilder(name).
 		WithConfig(&vnext.Config{
 			Name:         name,
-			SystemPrompt: hypothesizeSystemPrompt,
+			SystemPrompt: buildHypothesizeSystemPrompt(s.mode),
 			LLM: vnext.LLMConfig{
 				Provider:    s.llm.Provider,
 				Model:       s.llm.Model,
@@ -199,23 +201,38 @@ func parseHypotheses(content string) []Hypothesis {
 	return out
 }
 
-const hypothesizeSystemPrompt = `You are a distributed systems analyst. You are given an investigation brief from a log-analysis stage describing what was observed when a flaky automated test failed, and optionally an architecture document describing the system under test.
+// buildHypothesizeSystemPrompt produces the HYPOTHESIZE system prompt, adapting
+// the kind of mechanism it asks for to the failure mode.
+func buildHypothesizeSystemPrompt(m failmode.Mode) string {
+	mechanismFocus := "Prioritize the most likely nondeterministic mechanism."
+	titleHint := "summarizing the nondeterministic mechanism"
+	whatHint := "state WHAT could be racing/timing-out/colliding and WHERE it likely lives in the codebase"
+	if m.AlwaysFails {
+		mechanismFocus = "Prioritize the most likely deterministic defect — the test fails on every run, so favor real bugs, bad assertions, contract/schema mismatches, missing fixtures, environment changes, or recent regressions over races and timing windows."
+		titleHint = "summarizing the deterministic defect"
+		whatHint = "state WHAT is broken (the bug / assertion / mismatch / missing piece) and WHERE it likely lives in the codebase"
+	}
+	return fmt.Sprintf(`You are a distributed systems analyst. You are given an investigation brief from a log-analysis stage describing what was observed when an automated test failed, and optionally an architecture document describing the system under test.
 
-Your job is to generate a short ranked list of 1–3 hypotheses about what specific system behavior could have caused this failure. Prioritize the most likely nondeterministic mechanism.
+%s
+
+%s
+
+Your job is to generate a short ranked list of 1–3 hypotheses about what specific system behavior could have caused this failure. %s
 
 Each hypothesis must:
 - Name a specific component, code path, or interaction described in the architecture document (if provided) or implied by the brief.
 - Tie back to concrete evidence in the investigation brief.
-- Describe a specific nondeterministic condition: race, ordering assumption, timing window, resource limit, port or state collision, environmental variation.
+- Describe %s.
 - List the exact code symbols (file, class, function/method) that would prove or disprove it, and the minimal set of files an engineer would need to inspect to confirm or refute it.
 
 Output ONLY Markdown with this exact format (no preamble, no trailing text):
 
-## Hypothesis 1: <short title summarizing the nondeterministic mechanism>
-<2–4 sentence description tying the architecture to the log evidence; state WHAT could be racing/timing-out/colliding and WHERE it likely lives in the codebase>
+## Hypothesis 1: <short title %s>
+<2–4 sentence description tying the architecture to the log evidence; %s>
 
-**Key symbols:** ` + "`<file>:<class>.<function>`" + `, … (the symbols whose implementation would confirm or refute this)
-**Files to inspect:** ` + "`<file>`" + `, … (minimal set needed to confirm or refute)
+**Key symbols:** `+"`<file>:<class>.<function>`"+`, … (the symbols whose implementation would confirm or refute this)
+**Files to inspect:** `+"`<file>`"+`, … (minimal set needed to confirm or refute)
 
 ## Hypothesis 2: <short title>
 <description>
@@ -223,7 +240,9 @@ Output ONLY Markdown with this exact format (no preamble, no trailing text):
 **Key symbols:** …
 **Files to inspect:** …
 
-(Add further hypotheses only if well supported by the evidence.)`
+(Add further hypotheses only if well supported by the evidence.)`,
+		m.Description(), m.CausePrior(), mechanismFocus, m.ConditionGuidance(), titleHint, whatHint)
+}
 
 func buildHypothesizePrompt(test jenkins.FailedTest, brief, archDoc, memory string) string {
 	var b strings.Builder

@@ -11,6 +11,7 @@ import (
 	vnext "github.com/agenticgokit/agenticgokit/v1beta"
 
 	"github.com/gilbertr/testdiag/internal/config"
+	"github.com/gilbertr/testdiag/internal/failmode"
 	"github.com/gilbertr/testdiag/internal/jenkins"
 	"github.com/gilbertr/testdiag/internal/workspace"
 )
@@ -28,6 +29,7 @@ const handoffDir = ".testdiag/handoff"
 type logParseStage struct {
 	ws           *workspace.Workspace
 	llm          config.LLMSpec
+	mode         failmode.Mode
 	feedback     *feedbackChecker // nil when feedback is disabled
 	maxFeedbacks int
 	verbose      bool
@@ -37,15 +39,14 @@ type logParseStage struct {
 // newLogParseStage constructs the stage. fb is nil when feedback is disabled
 // (maxFeedbacks=0 or no feedback LLM configured); both are set together by
 // pipeline.New before calling this.
-func newLogParseStage(ws *workspace.Workspace, llm config.LLMSpec, fb *feedbackChecker, maxFeedbacks int, verbose bool, pauseFn func()) *logParseStage {
-	return &logParseStage{ws: ws, llm: llm, feedback: fb, maxFeedbacks: maxFeedbacks, verbose: verbose, pauseFn: pauseFn}
+func newLogParseStage(ws *workspace.Workspace, llm config.LLMSpec, mode failmode.Mode, fb *feedbackChecker, maxFeedbacks int, verbose bool, pauseFn func()) *logParseStage {
+	return &logParseStage{ws: ws, llm: llm, mode: mode, feedback: fb, maxFeedbacks: maxFeedbacks, verbose: verbose, pauseFn: pauseFn}
 }
 
 func (s *logParseStage) Name() State { return StateLogParse }
 
 func (s *logParseStage) Run(ctx context.Context, sc *Context) error {
-	head, tail := s.excerptHeadTail()
-	excerpt := makeExcerpt(combinedLog(sc.Test), head, tail)
+	logText := s.logForPrompt(combinedLog(sc.Test))
 
 	var (
 		prevBrief string
@@ -59,9 +60,9 @@ func (s *logParseStage) Run(ctx context.Context, sc *Context) error {
 		}
 		var prompt string
 		if critique == "" {
-			prompt = buildLogParsePrompt(sc.Test, excerpt)
+			prompt = buildLogParsePrompt(sc.Test, logText)
 		} else {
-			prompt = buildLogParseRetryPrompt(sc.Test, excerpt, prevBrief, critique)
+			prompt = buildLogParseRetryPrompt(sc.Test, logText, prevBrief, critique)
 		}
 		r, err := agent.Run(ctx, prompt)
 		if err != nil {
@@ -146,7 +147,7 @@ func (s *logParseStage) buildAgent(test jenkins.FailedTest) (vnext.Agent, error)
 	return vnext.NewBuilder(name).
 		WithConfig(&vnext.Config{
 			Name:         name,
-			SystemPrompt: logParseSystemPrompt,
+			SystemPrompt: buildLogParseSystemPrompt(s.mode),
 			LLM: vnext.LLMConfig{
 				Provider:    s.llm.Provider,
 				Model:       s.llm.Model,
@@ -178,10 +179,32 @@ func (s *logParseStage) writeBrief(test jenkins.FailedTest, brief string) (strin
 	return filepath.ToSlash(rel), nil
 }
 
+// logForPrompt returns the log text to embed in the LOGPARSE prompt. LOGPARSE
+// reads the ENTIRE log by design: the first traceback is at the top, but later
+// lines often carry the decisive evidence (a second error, a timeout, a resource
+// warning). Only a log large enough to threaten the model's context window is
+// trimmed, and even then a generous head and tail are kept rather than a narrow
+// slice. The full log is always saved to disk regardless.
+func (s *logParseStage) logForPrompt(log string) string {
+	cw := s.llm.ContextWindow
+	if cw <= 0 {
+		return log // window unknown: trust the operator and send the whole log
+	}
+	// ~4 chars per token; reserve ~30% of the window for the system prompt, the
+	// instructions, and the brief the model must still generate.
+	budgetChars := (cw * 4 * 7) / 10
+	if len(log) <= budgetChars {
+		return log
+	}
+	// Too large to fit whole: fall back to a large head+tail rather than crash
+	// the call. This path is hit only by pathologically huge logs.
+	head, tail := s.excerptHeadTail()
+	return makeExcerpt(log, head*4, tail*4)
+}
+
 // excerptHeadTail picks how many head/tail lines of the raw log to inline,
-// scaled to the LLM's context window. The full log is always saved to disk; this
-// only bounds what we put in the single LOGPARSE prompt so a huge log can't blow
-// the window.
+// scaled to the LLM's context window. Used only by logForPrompt's
+// large-log fallback; the common path sends the whole log.
 func (s *logParseStage) excerptHeadTail() (head, tail int) {
 	switch cw := s.llm.ContextWindow; {
 	case cw >= 100000:
@@ -211,26 +234,39 @@ func makeExcerpt(log string, head, tail int) string {
 	return b.String()
 }
 
-// logParseSystemPrompt instructs the LOGPARSE model. Its only job is to turn the
-// raw failure log into a focused brief for the next stage — NOT to fix anything.
-const logParseSystemPrompt = `You are a CI log analyst. You are given the raw failure log of ONE automated test that is FLAKY (it passes on most runs and failed only intermittently). You do NOT have access to the source code and you must NOT guess at fixes.
+// buildLogParseSystemPrompt instructs the LOGPARSE model. Its only job is to
+// turn the raw failure log into a focused brief for the next stage — NOT to fix
+// anything. The wording adapts to the failure mode so the brief steers the next
+// stages toward the right class of root cause.
+func buildLogParseSystemPrompt(m failmode.Mode) string {
+	conditionsHeading := "## Conditions To Check (flakiness hypotheses)"
+	conditionsBody := "A ranked bulleted list of the nondeterministic conditions that could explain an intermittent failure, each tied to the log evidence that suggests it."
+	if m.AlwaysFails {
+		conditionsHeading = "## Conditions To Check"
+		conditionsBody = "A ranked bulleted list of the deterministic defects that could explain a failure on every run, each tied to the log evidence that suggests it."
+	}
+	return fmt.Sprintf(`You are a CI log analyst. You are given the raw failure log of ONE automated test. %s You do NOT have access to the source code and you must NOT guess at fixes.
 
 Your ONLY job is to read the log and produce a concise INVESTIGATION BRIEF that a second engineer — who will NOT see this log, only your brief — can use to go straight into the source code and find the root cause. Extract leads, name names, and point at where to look.
+
+Read the WHOLE log, not just the first traceback: the first error is usually at the top, but a later line (a second exception, a timeout, a resource warning, an ordering oddity) is often the decisive clue.
 
 Work from the log only:
 - Find the FIRST genuine error / assertion / exception / timeout, not the downstream noise it caused.
 - Pull out the concrete identifiers the next stage will need to locate code: file paths, class/function/method names, modules, error messages, log tags, ports, RPC/endpoint names, thread or process names — quote them verbatim from the log.
-- Because the test is flaky, hypothesize what could differ between a passing and this failing run: a race, an ordering assumption, a timeout/deadline, a retry, a resource or port collision, leftover state, an environment condition. Tie each hypothesis to specific evidence in the log (a line, a timestamp gap, an ordering, a stack frame).
+- %s Hypothesize what could explain the failure as %s. Tie each hypothesis to specific evidence in the log (a line, a timestamp gap, an ordering, a stack frame).
 
 Output ONLY Markdown with exactly these sections (no preamble, no code fixes):
 ## First Real Error
 The earliest genuine failure, quoted, with the log location/context that identifies it.
 ## Source/Logic To Find
 A bulleted list of the specific files, symbols, and call paths the next stage should open, each with WHY (what to confirm there). Use the exact identifiers from the log.
-## Conditions To Check (flakiness hypotheses)
-A ranked bulleted list of the nondeterministic conditions that could explain an intermittent failure, each tied to the log evidence that suggests it.
+%s
+%s
 ## Notes For Next Stage
-Anything else useful: ambiguities, multiple candidate errors, what would confirm or rule out each hypothesis. Keep it short.`
+Anything else useful: ambiguities, multiple candidate errors, what would confirm or rule out each hypothesis. Keep it short.`,
+		m.Description(), m.CausePrior(), m.ConditionGuidance(), conditionsHeading, conditionsBody)
+}
 
 // buildLogParsePrompt assembles the single user message for the LOGPARSE pass.
 func buildLogParsePrompt(test jenkins.FailedTest, logExcerpt string) string {

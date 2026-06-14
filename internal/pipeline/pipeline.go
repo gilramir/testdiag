@@ -38,6 +38,7 @@ import (
 
 	"github.com/gilbertr/testdiag/internal/config"
 	"github.com/gilbertr/testdiag/internal/diagnose"
+	"github.com/gilbertr/testdiag/internal/failmode"
 	"github.com/gilbertr/testdiag/internal/jenkins"
 	"github.com/gilbertr/testdiag/internal/planner"
 	"github.com/gilbertr/testdiag/internal/workspace"
@@ -170,25 +171,25 @@ type Pipeline struct {
 // verbose; it should print "Press <ENTER> to continue..." and block until the
 // user presses ENTER. When pauseFn is non-nil the handoff is printed even if
 // verbose is false.
-func New(cfg *config.Config, ws *workspace.Workspace, spec PipelineSpec, background, memory string, verbose bool, drainInterrupt func(), pauseFn func()) *Pipeline {
+func New(cfg *config.Config, ws *workspace.Workspace, spec PipelineSpec, mode failmode.Mode, background, memory string, verbose bool, drainInterrupt func(), pauseFn func()) *Pipeline {
 	sc := &cfg.StageConfig
 
 	plnr := planner.New(ws, spec.Plan.LLM, background, memory, sc.PlanMaxToolIterations, cfg.Workspace.Mapper)
-	diagnoser := diagnose.New(ws, spec.DeepInspect.LLM, background, memory, sc.DeepInspectMaxToolIterations, cfg.Workspace.Mapper, drainInterrupt)
+	diagnoser := diagnose.New(ws, spec.DeepInspect.LLM, mode, background, memory, sc.DeepInspectMaxToolIterations, cfg.Workspace.Mapper, drainInterrupt)
 
 	// Build feedback checkers for each stage.
 	var lpFB, hFB, planFB, diFB, cFB *feedbackChecker
 	if sc.LogParseMaxFeedbacks > 0 {
-		lpFB = &feedbackChecker{llm: spec.LogParse.FeedbackLLM, systemPrompt: logParseFeedbackPrompt}
+		lpFB = &feedbackChecker{llm: spec.LogParse.FeedbackLLM, systemPrompt: buildLogParseFeedbackPrompt(mode)}
 	}
 	if sc.HypothesizeMaxFeedbacks > 0 {
-		hFB = &feedbackChecker{llm: spec.Hypothesize.FeedbackLLM, systemPrompt: hypothesizeFeedbackPrompt}
+		hFB = &feedbackChecker{llm: spec.Hypothesize.FeedbackLLM, systemPrompt: buildHypothesizeFeedbackPrompt(mode)}
 	}
 	if sc.PlanMaxFeedbacks > 0 {
 		planFB = &feedbackChecker{llm: spec.Plan.FeedbackLLM, systemPrompt: planInspectFeedbackPrompt}
 	}
 	if sc.DeepInspectMaxFeedbacks > 0 {
-		diFB = &feedbackChecker{llm: spec.DeepInspect.FeedbackLLM, systemPrompt: deepInspectFeedbackPrompt}
+		diFB = &feedbackChecker{llm: spec.DeepInspect.FeedbackLLM, systemPrompt: buildDeepInspectFeedbackPrompt(mode)}
 	}
 	if sc.SummarizeMaxFeedbacks > 0 {
 		cFB = &feedbackChecker{llm: spec.Summarize.FeedbackLLM, systemPrompt: summarizeFeedbackPrompt}
@@ -218,8 +219,8 @@ func New(cfg *config.Config, ws *workspace.Workspace, spec PipelineSpec, backgro
 	return &Pipeline{
 		stages: []Stage{
 			&downloadStage{ws: ws, verbose: verbose},
-			newLogParseStage(ws, spec.LogParse.LLM, lpFB, sc.LogParseMaxFeedbacks, verbose, pauseFn),
-			newHypothesizeStage(ws, spec.Hypothesize.LLM, archDoc, memory, hFB, sc.HypothesizeMaxFeedbacks, verbose, pauseFn),
+			newLogParseStage(ws, spec.LogParse.LLM, mode, lpFB, sc.LogParseMaxFeedbacks, verbose, pauseFn),
+			newHypothesizeStage(ws, spec.Hypothesize.LLM, mode, archDoc, memory, hFB, sc.HypothesizeMaxFeedbacks, verbose, pauseFn),
 			newPlanInspectAllStage(plnr, ws, archDoc, planFB, sc.PlanMaxFeedbacks, spec.Plan.ResetCounter, verbose, pauseFn),
 			newDeepInspectAllStage(diagnoser, ws, diFB, sc.DeepInspectMaxFeedbacks, spec.DeepInspect.ResetCounter, verbose, pauseFn),
 			newSummarizeStage(ws, spec.Summarize.LLM, cFB, sc.SummarizeMaxFeedbacks, verbose, pauseFn),
