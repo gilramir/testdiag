@@ -138,20 +138,26 @@ GUIDANCE:
 - Stop when you have a good candidate list (10–12 files maximum).
 - Workspace-relative paths only.
 
+DEEPINSPECT will follow your plan directly — it does not repeat your searches. Give it everything it needs:
+- **File path** (workspace-relative) for every file worth opening.
+- **Line range** (e.g. lines 42–80) when you already know which section matters.
+- **Substring or regex** to search for inside that file when the exact location is unknown.
+- **Why** each entry is relevant to this hypothesis — one short phrase.
+
 When done, output ONLY Markdown in exactly this format:
 
 ## Inspection Plan for Hypothesis N: <title>
 
 ### High Priority
-- ` + "`path/to/file`" + ` — pattern/glob to search or read, and why this file is critical for confirming or refuting the hypothesis
+- ` + "`path/to/file`" + ` [lines 42–80 | grep: ` + "`pattern`" + `] — why this file is critical for confirming or refuting the hypothesis
 
 ### Medium Priority
-- ` + "`path/to/file`" + ` — pattern/glob and reason
+- ` + "`path/to/file`" + ` [grep: ` + "`pattern`" + `] — reason
 
 ### Low Priority
-- ` + "`path/to/file`" + ` — pattern/glob and reason (examine if time permits)
+- ` + "`path/to/file`" + ` — reason (examine if time permits)
 
-Omit sections that have no entries.`
+The bracketed annotation is optional but strongly preferred when you know a line range or a useful search term. Omit sections that have no entries.`
 
 func buildSystemPrompt(brief, hypothesis string) string {
 	var b strings.Builder
