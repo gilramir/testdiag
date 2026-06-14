@@ -36,6 +36,7 @@ const (
 	StageDeepInspectFeedback = "deepinspect_feedback" // optional; falls back to deepinspect LLM
 	StageCombine             = "combine"              // optional; falls back to logparse LLM
 	StageCombineFeedback     = "combine_feedback"     // optional; falls back to combine LLM
+	StageMemoize             = "memorize"             // optional; falls back to logparse LLM
 )
 
 // Config is the fully-resolved configuration for a testdiag run.

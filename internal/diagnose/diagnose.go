@@ -55,20 +55,22 @@ type Diagnoser struct {
 	ws                *workspace.Workspace
 	llm               config.LLMSpec
 	background        string // contents of TEST_AGENT.md
+	memory            string // contents of .testdiag/memory.md (may be empty)
 	maxToolIterations int
-	mapper            string   // path to test→source mapper executable; may be empty
-	drainFn           func()   // called at the start of each Diagnose(); may be nil
+	mapper            string // path to test→source mapper executable; may be empty
+	drainFn           func() // called at the start of each Diagnose(); may be nil
 }
 
 // New creates a Diagnoser. llm is the LLM assigned to the DEEPINSPECT stage;
 // background is the TEST_AGENT.md content (may be "");
+// memory is the contents of .testdiag/memory.md (may be "");
 // maxToolIterations caps the tool-calling loop per attempt;
 // mapper is the optional path to the test→source mapping executable;
 // drainFn, if non-nil, is called before each attempt to discard any queued
 // operator messages that arrived between hypothesis runs.
-func New(ws *workspace.Workspace, llm config.LLMSpec, background string, maxToolIterations int, mapper string, drainFn func()) *Diagnoser {
+func New(ws *workspace.Workspace, llm config.LLMSpec, background, memory string, maxToolIterations int, mapper string, drainFn func()) *Diagnoser {
 	return &Diagnoser{
-		ws: ws, llm: llm, background: background,
+		ws: ws, llm: llm, background: background, memory: memory,
 		maxToolIterations: maxToolIterations, mapper: mapper,
 		drainFn: drainFn,
 	}
@@ -105,7 +107,7 @@ func (d *Diagnoser) Diagnose(ctx context.Context, input DiagnoseInput) (Result, 
 	}
 
 	tools.ResetLoopGuard()
-	r, err := agent.Run(ctx, buildUserPrompt(input, m, d.background))
+	r, err := agent.Run(ctx, buildUserPrompt(input, m, d.background, d.memory))
 	if err != nil {
 		return Result{}, fmt.Errorf("agent run for %s: %w", input.Test.FullName(), err)
 	}

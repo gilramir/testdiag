@@ -22,6 +22,7 @@ Given a Jenkins build URL:
    ```
    DOWNLOAD → LOGPARSE → FEEDBACK → HYPOTHESIZE → FEEDBACK →
    [PLANINSPECTION → FEEDBACK → DEEPINSPECT → FEEDBACK] × N → COMBINE → FEEDBACK
+   → MEMORIZE
    ```
 
    - **DOWNLOAD** — saves the test's full failure log under `.testdiag/logs/`.
@@ -63,14 +64,24 @@ Given a Jenkins build URL:
    - **FEEDBACK** — checks the combined analysis; retries up to
      `combine_max_feedbacks` times.
 
+   - **MEMORIZE** — after the report is written, a tool-less LLM reads all the
+     pipeline handoff files for that test and extracts **durable, reusable
+     codebase facts** (specific file paths, function names, shared resources,
+     component roles) that would help a future agent navigate the same codebase
+     faster. Facts are appended to `.testdiag/memory.md`. On subsequent runs
+     that file is loaded at startup and injected into every PLANINSPECTION and
+     DEEPINSPECT prompt as prior knowledge. A missing or empty memory file is
+     silently ignored.
+
 4. Writes one Markdown root-cause report per test under `test-diagnosis/`. The
    report contains the COMBINE analysis as its main body plus a per-hypothesis
    DEEPINSPECT appendix.
 
 You can assign a **different LLM to every stage** (see [Setup](#setup)): a cheap
-model can parse the log, generate hypotheses, and combine results, while a stronger
-model does the source tracing. PLANINSPECTION defaults to the deepinspect LLM when
-not explicitly assigned; all other optional stages default to the logparse LLM.
+model can parse the log, generate hypotheses, combine results, and distill memory,
+while a stronger model does the source tracing. PLANINSPECTION defaults to the
+deepinspect LLM when not explicitly assigned; all other optional stages (including
+MEMORIZE) default to the logparse LLM.
 
 Each test is diagnosed independently — its own agents, no shared memory. Tests are
 run sequentially so the output and the `run_script` approval prompts stay coherent
@@ -161,6 +172,7 @@ deepinspect = "deep"   # gets the brief + plan + source tools, finds the root ca
 # planinspection           = "deep"   # surveys workspace for relevant files; defaults to deepinspect LLM
 # hypothesize              = "fast"   # all others default to logparse LLM
 # combine                  = "fast"
+# memorize                 = "fast"   # post-test distillation; defaults to logparse LLM
 # logparse_feedback        = "fast"
 # hypothesize_feedback     = "fast"
 # planinspection_feedback  = "fast"
@@ -169,8 +181,8 @@ deepinspect = "deep"   # gets the brief + plan + source tools, finds the root ca
 ```
 
 The two required stages are `logparse` and `deepinspect`. PLANINSPECTION defaults to
-the deepinspect LLM; everything else falls back to the logparse LLM when not
-explicitly assigned.
+the deepinspect LLM; MEMORIZE and all other optional stages fall back to the logparse
+LLM when not explicitly assigned.
 
 ### Architecture document
 
@@ -291,6 +303,7 @@ internal/pipeline           stage state machine and all stage implementations
   pipeline.go               Pipeline, Context, FinalResult, Hypothesis, PlanInspectOutcome, DeepInspectOutcome
 internal/planner            the PLANINSPECTION agent: build, prompt, one-shot tool loop
 internal/diagnose           the DEEPINSPECT agent: build, prompt, one-shot tool loop
+internal/distill            post-test MEMORIZE step: extract codebase facts → .testdiag/memory.md
 internal/mapping            test -> source file mapper
 internal/workspace          path jail for the file tools
 internal/tools              the workspace tools (native-schema internal tools)

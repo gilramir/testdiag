@@ -1,23 +1,29 @@
 // Package pipeline runs the per-test diagnosis as an explicit state machine:
 //
-//	DOWNLOAD    — materialize the failing test's log to .testdiag/logs/<test>.log
-//	LOGPARSE    — one tool-less LLM pass that distils the log into an investigation
-//	             brief (.testdiag/handoff/<test>.logparse.md)
-//	FEEDBACK    — checks the brief; rejects with a critique until it meets the goal
-//	             (up to StageConfig.LogParseMaxFeedbacks rejections)
-//	HYPOTHESIZE — reads the brief + the optional architecture document and produces
-//	             a ranked list of 1+ hypotheses (.testdiag/handoff/<test>.hypothesize.md);
-//	             0 hypotheses → the test is abandoned
-//	FEEDBACK    — checks the hypothesis list (up to HypothesizeMaxFeedbacks)
-//	PLAN        — one tool-using agent per hypothesis; surveys the workspace and
-//	             produces an annotated file list for DEEPINSPECT to follow
-//	             (.testdiag/handoff/<test>.h<N>.plan.md); soft-fails per hypothesis
-//	DEEPINSPECT — one agent run per hypothesis, jailed to workspace source tools;
-//	             receives both the hypothesis and the PLAN output; each gets its own
-//	             FEEDBACK gate; a failed hypothesis is noted but does not stop the pipeline
-//	COMBINE     — reads all hypotheses + DEEPINSPECT results and picks the best
-//	             supported root cause (.testdiag/handoff/<test>.combine.md)
-//	FEEDBACK    — checks the combined analysis (up to CombineMaxFeedbacks)
+//	DOWNLOAD        — materialize the failing test's log to .testdiag/logs/<test>.log
+//	LOGPARSE        — one tool-less LLM pass that distils the log into an investigation
+//	                 brief (.testdiag/handoff/<test>.logparse.md)
+//	FEEDBACK        — checks the brief; rejects with a critique until it meets the goal
+//	                 (up to StageConfig.LogParseMaxFeedbacks rejections)
+//	HYPOTHESIZE     — reads the brief + the optional architecture document and produces
+//	                 a ranked list of 1+ hypotheses (.testdiag/handoff/<test>.hypothesize.md);
+//	                 0 hypotheses → the test is abandoned
+//	FEEDBACK        — checks the hypothesis list (up to HypothesizeMaxFeedbacks)
+//	PLANINSPECTION  — one tool-using agent per hypothesis; surveys the workspace and
+//	                 produces an annotated file list for DEEPINSPECT to follow
+//	                 (.testdiag/handoff/<test>.h<N>.planinspect.md); soft-fails per hypothesis
+//	FEEDBACK        — checks each plan (up to PlanMaxFeedbacks)
+//	DEEPINSPECT     — one agent run per hypothesis, jailed to workspace source tools;
+//	                 receives both the hypothesis and the PLANINSPECTION output; each gets
+//	                 its own FEEDBACK gate; a failed hypothesis is noted but does not stop the pipeline;
+//	                 result saved to .testdiag/handoff/<test>.h<N>.deepinspect.md
+//	COMBINE         — reads all hypotheses + DEEPINSPECT results and picks the best
+//	                 supported root cause (.testdiag/handoff/<test>.combine.md)
+//	FEEDBACK        — checks the combined analysis (up to CombineMaxFeedbacks)
+//
+// After the pipeline the caller runs a MEMORIZE step (internal/distill) that
+// extracts durable codebase facts from all handoff files and appends them to
+// .testdiag/memory.md for use by future runs.
 package pipeline
 
 import (
@@ -146,11 +152,12 @@ type Pipeline struct {
 // drainInterrupt, if non-nil, is called before each DEEPINSPECT attempt to
 // discard queued operator messages that arrived between hypothesis runs; it is
 // the InterruptController.Drain method wired in by main.
-func New(cfg *config.Config, ws *workspace.Workspace, spec PipelineSpec, background string, verbose bool, drainInterrupt func()) *Pipeline {
+// memory is the contents of .testdiag/memory.md from prior runs (may be "").
+func New(cfg *config.Config, ws *workspace.Workspace, spec PipelineSpec, background, memory string, verbose bool, drainInterrupt func()) *Pipeline {
 	sc := &cfg.StageConfig
 
-	plnr := planner.New(ws, spec.Plan.LLM, background, sc.PlanMaxToolIterations, cfg.Workspace.Mapper)
-	diagnoser := diagnose.New(ws, spec.DeepInspect.LLM, background, sc.DeepInspectMaxToolIterations, cfg.Workspace.Mapper, drainInterrupt)
+	plnr := planner.New(ws, spec.Plan.LLM, background, memory, sc.PlanMaxToolIterations, cfg.Workspace.Mapper)
+	diagnoser := diagnose.New(ws, spec.DeepInspect.LLM, background, memory, sc.DeepInspectMaxToolIterations, cfg.Workspace.Mapper, drainInterrupt)
 
 	// Build feedback checkers for each stage.
 	var lpFB, hFB, planFB, diFB, cFB *feedbackChecker
@@ -196,7 +203,7 @@ func New(cfg *config.Config, ws *workspace.Workspace, spec PipelineSpec, backgro
 			newLogParseStage(ws, spec.LogParse.LLM, lpFB, sc.LogParseMaxFeedbacks, verbose),
 			newHypothesizeStage(ws, spec.Hypothesize.LLM, archDoc, hFB, sc.HypothesizeMaxFeedbacks, verbose),
 			newPlanInspectAllStage(plnr, ws, archDoc, planFB, sc.PlanMaxFeedbacks, verbose),
-			newDeepInspectAllStage(diagnoser, diFB, sc.DeepInspectMaxFeedbacks, verbose),
+			newDeepInspectAllStage(diagnoser, ws, diFB, sc.DeepInspectMaxFeedbacks, verbose),
 			newCombineStage(ws, spec.Combine.LLM, cFB, sc.CombineMaxFeedbacks, verbose),
 		},
 		stateNames: names,

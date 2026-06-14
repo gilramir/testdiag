@@ -30,6 +30,7 @@ import (
 	_ "github.com/agenticgokit/agenticgokit/plugins/llm/openai"
 
 	"github.com/gilbertr/testdiag/internal/config"
+	"github.com/gilbertr/testdiag/internal/distill"
 	"github.com/gilbertr/testdiag/internal/jenkins"
 	"github.com/gilbertr/testdiag/internal/llmproxy"
 	"github.com/gilbertr/testdiag/internal/pipeline"
@@ -41,6 +42,10 @@ import (
 // backgroundFile is read from the workspace root and injected into every
 // diagnosis as project context.
 const backgroundFile = "TEST_AGENT.md"
+
+// memoryFile is appended to by the distillation step after each test and read
+// at startup to inject prior codebase knowledge into PLANINSPECTION and DEEPINSPECT.
+const memoryFile = ".testdiag/memory.md"
 
 // options holds the parsed command-line arguments.
 type options struct {
@@ -113,6 +118,7 @@ func run() error {
 	}
 
 	background := readBackground(ws.Root())
+	memory := readMemory(ws.Root())
 
 	// Register the workspace file tools once. Exclude the output directory from
 	// tree searches so the agent never reads its own generated reports.
@@ -136,6 +142,7 @@ func run() error {
 	hypothesizeLLM := fallbackLLM(cfg, config.StageHypothsize, logparseLLM)
 	planLLM := fallbackLLM(cfg, config.StagePlanInspect, deepinspectLLM)
 	combineLLM := fallbackLLM(cfg, config.StageCombine, logparseLLM)
+	memorizeLLM := fallbackLLM(cfg, config.StageMemoize, logparseLLM)
 
 	// Feedback LLMs — each falls back to its primary stage's LLM.
 	logparseFBLLM := fallbackLLM(cfg, config.StageLogParseFeedback, logparseLLM)
@@ -161,14 +168,15 @@ func run() error {
 		}
 		// Tool-less stages share a proxy when they use the same endpoint.
 		for stageName, llmPtr := range map[string]*config.LLMSpec{
-			"logparse":               &logparseLLM,
-			"logparse_feedback":      &logparseFBLLM,
-			"hypothesize":            &hypothesizeLLM,
-			"hypothesize_feedback":   &hypothesizeFBLLM,
+			"logparse":                &logparseLLM,
+			"logparse_feedback":       &logparseFBLLM,
+			"hypothesize":             &hypothesizeLLM,
+			"hypothesize_feedback":    &hypothesizeFBLLM,
 			"planinspection_feedback": &planFBLLM,
-			"deepinspect_feedback":   &deepinspectFBLLM,
-			"combine":                &combineLLM,
-			"combine_feedback":       &combineFBLLM,
+			"deepinspect_feedback":    &deepinspectFBLLM,
+			"combine":                 &combineLLM,
+			"combine_feedback":        &combineFBLLM,
+			"memorize":                &memorizeLLM,
 		} {
 			if *llmPtr, err = pm.front(stageName, *llmPtr, nil); err != nil {
 				return err
@@ -229,7 +237,8 @@ func run() error {
 			FeedbackLLM: combineFBLLM,
 		},
 	}
-	pl := pipeline.New(cfg, ws, spec, background, opts.Verbose, ic.Drain)
+	pl := pipeline.New(cfg, ws, spec, background, memory, opts.Verbose, ic.Drain)
+	distiller := distill.New(ws, memorizeLLM)
 
 	fmt.Printf("Found %d failed test(s). Workspace: %s\n", len(failures), ws.Root())
 	fmt.Printf("Pipeline: %v\n", pl.States())
@@ -248,9 +257,14 @@ func run() error {
 		sc.DeepInspectMaxToolIterations, sc.DeepInspectMaxFeedbacks)
 	fmt.Printf("  COMBINE     -> %s (model %s, feedbacks=%d)\n",
 		combineLLM.BaseURL, combineLLM.Model, sc.CombineMaxFeedbacks)
+	fmt.Printf("  MEMORIZE    -> %s (model %s)\n",
+		memorizeLLM.BaseURL, memorizeLLM.Model)
+	if memory != "" {
+		fmt.Printf("  memory: %d byte(s) of prior codebase knowledge loaded\n", len(memory))
+	}
 	fmt.Printf("Diagnosing one at a time; reports -> %s\n\n", cfg.Output.Dir)
 
-	return process(ctx, pl, failures, cfg.Output)
+	return process(ctx, pl, distiller, failures, cfg.Output)
 }
 
 // fallbackLLM resolves the LLM for an optional stage, falling back to
@@ -264,7 +278,7 @@ func fallbackLLM(cfg *config.Config, stage string, fallback config.LLMSpec) conf
 
 // process diagnoses failures one at a time, in order. Sequential execution
 // keeps the output and run_script approval prompts coherent for the operator.
-func process(ctx context.Context, pl *pipeline.Pipeline, failures []jenkins.FailedTest, out config.Output) error {
+func process(ctx context.Context, pl *pipeline.Pipeline, d *distill.Distiller, failures []jenkins.FailedTest, out config.Output) error {
 	var failed, analyzed int
 
 	for _, test := range failures {
@@ -275,12 +289,17 @@ func process(ctx context.Context, pl *pipeline.Pipeline, failures []jenkins.Fail
 		if err != nil {
 			failed++
 			fmt.Fprintf(os.Stderr, "  ✗ %s: %v\n", test.FullName(), err)
-		} else if path, werr := report.Write(out.Dir, res); werr != nil {
+			continue
+		}
+		if path, werr := report.Write(out.Dir, res); werr != nil {
 			failed++
 			fmt.Fprintf(os.Stderr, "  ✗ %s: writing report: %v\n", test.FullName(), werr)
 		} else {
 			analyzed++
 			fmt.Printf("  ✓ %s -> %s (%s)\n", test.FullName(), path, res.Duration.Round(1e6))
+		}
+		if derr := d.Distill(ctx, test); derr != nil {
+			fmt.Fprintf(os.Stderr, "  warning: memorize failed for %s: %v\n", test.FullName(), derr)
 		}
 	}
 
@@ -390,6 +409,15 @@ func readBackground(root string) string {
 			fmt.Fprintf(os.Stderr, "warning: could not read %s: %v\n", path, err)
 		}
 		return ""
+	}
+	return string(data)
+}
+
+func readMemory(root string) string {
+	path := filepath.Join(root, memoryFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "" // missing is fine; the file is created on the first run
 	}
 	return string(data)
 }

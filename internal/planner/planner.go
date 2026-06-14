@@ -45,15 +45,17 @@ type Planner struct {
 	ws                *workspace.Workspace
 	llm               config.LLMSpec
 	background        string
+	memory            string // contents of .testdiag/memory.md (may be empty)
 	maxToolIterations int
 	mapper            string
 }
 
 // New creates a Planner. background is the contents of TEST_AGENT.md (may be
-// empty); mapper is the optional path to the test→source mapping executable.
-func New(ws *workspace.Workspace, llm config.LLMSpec, background string, maxToolIterations int, mapper string) *Planner {
+// empty); memory is the contents of .testdiag/memory.md (may be empty);
+// mapper is the optional path to the test→source mapping executable.
+func New(ws *workspace.Workspace, llm config.LLMSpec, background, memory string, maxToolIterations int, mapper string) *Planner {
 	return &Planner{
-		ws: ws, llm: llm, background: background,
+		ws: ws, llm: llm, background: background, memory: memory,
 		maxToolIterations: maxToolIterations, mapper: mapper,
 	}
 }
@@ -77,7 +79,7 @@ func (p *Planner) Plan(ctx context.Context, input PlanInput) (Result, error) {
 	}
 
 	tools.ResetLoopGuard()
-	r, err := agent.Run(ctx, buildUserPrompt(input, m, p.background))
+	r, err := agent.Run(ctx, buildUserPrompt(input, m, p.background, p.memory))
 	if err != nil {
 		return Result{}, fmt.Errorf("plan agent run for %s: %w", input.Test.FullName(), err)
 	}
@@ -160,7 +162,7 @@ func buildSystemPrompt(brief, hypothesis string) string {
 	return b.String()
 }
 
-func buildUserPrompt(input PlanInput, m mapping.Result, background string) string {
+func buildUserPrompt(input PlanInput, m mapping.Result, background, memory string) string {
 	var b strings.Builder
 	if input.PrevResult != "" {
 		fmt.Fprintf(&b, "Your previous inspection plan for hypothesis %d was reviewed and found insufficient.\n\n", input.HypothesisIndex)
@@ -179,6 +181,12 @@ func buildUserPrompt(input PlanInput, m mapping.Result, background string) strin
 		fmt.Fprintf(&b, "- Likely source file: %s\n", m.SourceFile)
 	}
 	b.WriteString("\n")
+
+	if strings.TrimSpace(memory) != "" {
+		b.WriteString("## Prior codebase knowledge (from past investigations)\n\n")
+		b.WriteString(strings.TrimSpace(memory))
+		b.WriteString("\n\n")
+	}
 
 	if strings.TrimSpace(background) != "" {
 		b.WriteString("## Project background\n\n")

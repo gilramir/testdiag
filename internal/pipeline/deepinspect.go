@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/gilbertr/testdiag/internal/diagnose"
+	"github.com/gilbertr/testdiag/internal/workspace"
 )
 
 // deepInspectAllStage runs one DEEPINSPECT+FEEDBACK pass per hypothesis from
@@ -14,13 +17,14 @@ import (
 // the COMBINE stage will work with whatever results are available.
 type deepInspectAllStage struct {
 	d            *diagnose.Diagnoser
+	ws           *workspace.Workspace
 	feedback     *feedbackChecker // nil when DEEPINSPECT feedback is disabled
 	maxFeedbacks int
 	verbose      bool
 }
 
-func newDeepInspectAllStage(d *diagnose.Diagnoser, fb *feedbackChecker, maxFeedbacks int, verbose bool) *deepInspectAllStage {
-	return &deepInspectAllStage{d: d, feedback: fb, maxFeedbacks: maxFeedbacks, verbose: verbose}
+func newDeepInspectAllStage(d *diagnose.Diagnoser, ws *workspace.Workspace, fb *feedbackChecker, maxFeedbacks int, verbose bool) *deepInspectAllStage {
+	return &deepInspectAllStage{d: d, ws: ws, feedback: fb, maxFeedbacks: maxFeedbacks, verbose: verbose}
 }
 
 func (s *deepInspectAllStage) Name() State { return StateDeepInspect }
@@ -81,7 +85,7 @@ func (s *deepInspectAllStage) runOne(ctx context.Context, sc *Context, h Hypothe
 
 		if s.feedback == nil {
 			out.FeedbackApproved = true
-			return out
+			return s.save(sc, h, out)
 		}
 
 		ok, newCritique, err := s.feedback.Check(ctx, sc.Test, res.Content)
@@ -92,7 +96,7 @@ func (s *deepInspectAllStage) runOne(ctx context.Context, sc *Context, h Hypothe
 			if s.verbose {
 				fmt.Fprintf(os.Stdout, "  DEEPINSPECT h%d FEEDBACK error: %v\n", h.Index, err)
 			}
-			return out
+			return s.save(sc, h, out)
 		}
 		if s.verbose {
 			if ok {
@@ -103,16 +107,43 @@ func (s *deepInspectAllStage) runOne(ctx context.Context, sc *Context, h Hypothe
 		}
 		if ok {
 			out.FeedbackApproved = true
-			return out
+			return s.save(sc, h, out)
 		}
 		feedbacks++
 		if feedbacks >= s.maxFeedbacks {
 			out.Failed = true
 			out.FailReason = fmt.Sprintf("did not meet goals after %d feedback(s): %s", feedbacks, newCritique)
-			return out
+			return s.save(sc, h, out)
 		}
 		prevResult = res.Content
 		critique = newCritique
 	}
 }
 
+// save writes the DEEPINSPECT result to a handoff file so the distillation
+// stage can read it later. It always returns out unchanged so callers can
+// write `return s.save(sc, h, out)` without a separate variable.
+func (s *deepInspectAllStage) save(sc *Context, h Hypothesis, out DeepInspectOutcome) DeepInspectOutcome {
+	if strings.TrimSpace(out.Content) == "" {
+		return out
+	}
+	dir := filepath.Join(s.ws.Root(), handoffDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		if s.verbose {
+			fmt.Fprintf(os.Stderr, "  DEEPINSPECT h%d: could not create handoff dir: %v\n", h.Index, err)
+		}
+		return out
+	}
+	base := fmt.Sprintf("%s.h%d.deepinspect.md", sanitize(sc.Test.FullName()), h.Index)
+	abs := filepath.Join(s.ws.Root(), handoffDir, base)
+	header := fmt.Sprintf("# Deep Inspection (DEEPINSPECT) h%d: %s\n\n", h.Index, sc.Test.FullName())
+	if err := os.WriteFile(abs, []byte(header+strings.TrimSpace(out.Content)+"\n"), 0o644); err != nil {
+		if s.verbose {
+			fmt.Fprintf(os.Stderr, "  DEEPINSPECT h%d: could not write handoff file: %v\n", h.Index, err)
+		}
+	} else if s.verbose {
+		fmt.Fprintf(os.Stdout, "--- DEEPINSPECT h%d output for %s ---\n%s\n--- end ---\n\n",
+			h.Index, sc.Test.FullName(), strings.TrimSpace(out.Content))
+	}
+	return out
+}

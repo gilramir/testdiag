@@ -70,7 +70,7 @@ func buildSystemPrompt(brief, hypothesis string) string {
 // When input.PrevResult and input.Critique are set this is a feedback-triggered
 // retry: the prior draft and the critique are prepended so the agent knows
 // exactly what to improve.
-func buildUserPrompt(input DiagnoseInput, m mapping.Result, background string) string {
+func buildUserPrompt(input DiagnoseInput, m mapping.Result, background, memory string) string {
 	var b strings.Builder
 
 	if input.PrevResult != "" {
@@ -106,6 +106,12 @@ func buildUserPrompt(input DiagnoseInput, m mapping.Result, background string) s
 		b.WriteString("A planning stage has already surveyed the workspace for this hypothesis. ")
 		b.WriteString("Start your investigation from the files listed below; you may follow additional leads as needed.\n\n")
 		b.WriteString(strings.TrimSpace(input.Plan))
+		b.WriteString("\n\n")
+	}
+
+	if strings.TrimSpace(memory) != "" {
+		b.WriteString("## Prior codebase knowledge (from past investigations)\n\n")
+		b.WriteString(strings.TrimSpace(memory))
 		b.WriteString("\n\n")
 	}
 
