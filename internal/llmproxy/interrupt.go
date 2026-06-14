@@ -25,7 +25,8 @@ type InterruptController struct {
 	done        chan struct{} // closed when WatchStdin goroutine exits
 
 	mu      sync.Mutex
-	confirm bool // true while run_script is waiting for a response
+	confirm bool     // true while run_script is waiting for a response
+	sticky  []string // operator notes accumulated during the current DEEPINSPECT run
 }
 
 // NewInterruptController allocates the controller. Call WatchStdin to start
@@ -109,14 +110,33 @@ func (ic *InterruptController) ReadLine(ctx context.Context) (string, bool) {
 	}
 }
 
-// Drain discards all queued interrupt messages. Call between hypothesis runs
-// to prevent stale input from accidentally triggering chat mode.
+// Drain discards all queued interrupt messages and clears accumulated operator
+// notes. Call between hypothesis runs to start each run with a clean slate.
 func (ic *InterruptController) Drain() {
 	for {
 		select {
 		case <-ic.interruptCh:
 		default:
+			ic.mu.Lock()
+			ic.sticky = nil
+			ic.mu.Unlock()
 			return
 		}
 	}
+}
+
+// AddStickyNote records an operator message so the proxy can re-inject it into
+// every subsequent LLM request in this DEEPINSPECT run.
+func (ic *InterruptController) AddStickyNote(note string) {
+	ic.mu.Lock()
+	ic.sticky = append(ic.sticky, note)
+	ic.mu.Unlock()
+}
+
+// StickyNotes returns a snapshot of accumulated operator notes.
+func (ic *InterruptController) StickyNotes() []string {
+	ic.mu.Lock()
+	out := append([]string(nil), ic.sticky...)
+	ic.mu.Unlock()
+	return out
 }

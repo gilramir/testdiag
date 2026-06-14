@@ -29,6 +29,11 @@ type chatHandler struct {
 
 func (h *chatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if isChatCompletions(r.URL.Path) {
+		// Re-inject accumulated operator notes into the system prompt on every
+		// request so guidance from earlier interrupts survives across turns.
+		if notes := h.interrupt.StickyNotes(); len(notes) > 0 {
+			r = withStickyNotes(r, notes)
+		}
 		if trigger, ok := h.interrupt.TakeNonBlocking(); ok {
 			msg := strings.TrimSpace(trigger)
 			if msg == "" {
@@ -49,6 +54,43 @@ func (h *chatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.rp.ServeHTTP(w, r)
 }
 
+// withStickyNotes clones r and appends operator notes to its system message.
+func withStickyNotes(r *http.Request, notes []string) *http.Request {
+	body, _, ok := readJSONBody(r)
+	if !ok {
+		return r
+	}
+	msgs, _ := body["messages"].([]interface{})
+	for _, m := range msgs {
+		msg, ok := m.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if msg["role"] == "system" {
+			var sb strings.Builder
+			sb.WriteString(contentString(msg["content"]))
+			sb.WriteString("\n\n## Operator notes\n")
+			for _, note := range notes {
+				sb.WriteString("- ")
+				sb.WriteString(note)
+				sb.WriteString("\n")
+			}
+			msg["content"] = sb.String()
+			break
+		}
+	}
+	body["messages"] = msgs
+	out, err := json.Marshal(body)
+	if err != nil {
+		return r
+	}
+	r2 := r.Clone(r.Context())
+	r2.Body = io.NopCloser(bytes.NewReader(out))
+	r2.ContentLength = int64(len(out))
+	r2.Header.Set("Content-Length", fmt.Sprintf("%d", len(out)))
+	return r2
+}
+
 func (h *chatHandler) runChatLoop(w http.ResponseWriter, r *http.Request, firstMsg string) {
 	body, _, ok := readJSONBody(r)
 	if !ok {
@@ -64,6 +106,9 @@ func (h *chatHandler) runChatLoop(w http.ResponseWriter, r *http.Request, firstM
 	scrubContinuationNudge(body)
 
 	fmt.Fprintf(os.Stdout, "\n\033[1;97;41m DEEPINSPECT INTERRUPTED \033[0m\n\n")
+
+	// Persist the message so every subsequent request carries it.
+	h.interrupt.AddStickyNote(firstMsg)
 
 	msgs, _ := body["messages"].([]interface{})
 	msgs = append(msgs, map[string]interface{}{
@@ -103,6 +148,8 @@ func (h *chatHandler) runChatLoop(w http.ResponseWriter, r *http.Request, firstM
 			return
 		}
 
+		reply = strings.TrimSpace(reply)
+		h.interrupt.AddStickyNote(reply)
 		msgs = body["messages"].([]interface{})
 		msgs = append(msgs,
 			map[string]interface{}{"role": "assistant", "content": content},
