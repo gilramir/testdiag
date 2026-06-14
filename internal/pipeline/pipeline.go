@@ -219,7 +219,7 @@ func New(cfg *config.Config, ws *workspace.Workspace, spec PipelineSpec, backgro
 		stages: []Stage{
 			&downloadStage{ws: ws, verbose: verbose},
 			newLogParseStage(ws, spec.LogParse.LLM, lpFB, sc.LogParseMaxFeedbacks, verbose, pauseFn),
-			newHypothesizeStage(ws, spec.Hypothesize.LLM, archDoc, hFB, sc.HypothesizeMaxFeedbacks, verbose, pauseFn),
+			newHypothesizeStage(ws, spec.Hypothesize.LLM, archDoc, memory, hFB, sc.HypothesizeMaxFeedbacks, verbose, pauseFn),
 			newPlanInspectAllStage(plnr, ws, archDoc, planFB, sc.PlanMaxFeedbacks, spec.Plan.ResetCounter, verbose, pauseFn),
 			newDeepInspectAllStage(diagnoser, ws, diFB, sc.DeepInspectMaxFeedbacks, spec.DeepInspect.ResetCounter, verbose, pauseFn),
 			newSummarizeStage(ws, spec.Summarize.LLM, cFB, sc.SummarizeMaxFeedbacks, verbose, pauseFn),

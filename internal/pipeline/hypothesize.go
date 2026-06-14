@@ -25,15 +25,16 @@ type hypothesizeStage struct {
 	ws           *workspace.Workspace
 	llm          config.LLMSpec
 	archDocPath  string           // workspace-relative; may be empty
+	memory       string           // contents of .testdiag/memory.md (may be empty)
 	feedback     *feedbackChecker // nil when disabled
 	maxFeedbacks int
 	verbose      bool
 	pauseFn      func() // non-nil when -p is set; called after each handoff print
 }
 
-func newHypothesizeStage(ws *workspace.Workspace, llm config.LLMSpec, archDocPath string, fb *feedbackChecker, maxFeedbacks int, verbose bool, pauseFn func()) *hypothesizeStage {
+func newHypothesizeStage(ws *workspace.Workspace, llm config.LLMSpec, archDocPath, memory string, fb *feedbackChecker, maxFeedbacks int, verbose bool, pauseFn func()) *hypothesizeStage {
 	return &hypothesizeStage{
-		ws: ws, llm: llm, archDocPath: archDocPath,
+		ws: ws, llm: llm, archDocPath: archDocPath, memory: memory,
 		feedback: fb, maxFeedbacks: maxFeedbacks, verbose: verbose, pauseFn: pauseFn,
 	}
 }
@@ -55,9 +56,9 @@ func (s *hypothesizeStage) Run(ctx context.Context, sc *Context) error {
 		}
 		var prompt string
 		if critique == "" {
-			prompt = buildHypothesizePrompt(sc.Test, sc.Brief, archDoc)
+			prompt = buildHypothesizePrompt(sc.Test, sc.Brief, archDoc, s.memory)
 		} else {
-			prompt = buildHypothesizeRetryPrompt(sc.Test, sc.Brief, archDoc, prevOutput, critique)
+			prompt = buildHypothesizeRetryPrompt(sc.Test, sc.Brief, archDoc, s.memory, prevOutput, critique)
 		}
 		r, err := agent.Run(ctx, prompt)
 		if err != nil {
@@ -224,22 +225,27 @@ Output ONLY Markdown with this exact format (no preamble, no trailing text):
 
 (Add further hypotheses only if well supported by the evidence.)`
 
-func buildHypothesizePrompt(test jenkins.FailedTest, brief, archDoc string) string {
+func buildHypothesizePrompt(test jenkins.FailedTest, brief, archDoc, memory string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Generate hypotheses for the failing test **%s**.\n\n", test.FullName())
 	b.WriteString("## Investigation brief (from LOGPARSE)\n\n")
 	b.WriteString(strings.TrimSpace(brief))
 	b.WriteString("\n\n")
+	if strings.TrimSpace(memory) != "" {
+		b.WriteString("## Prior codebase knowledge (from past investigations)\n\n")
+		b.WriteString(strings.TrimSpace(memory))
+		b.WriteString("\n\n")
+	}
 	if strings.TrimSpace(archDoc) != "" {
 		b.WriteString("## Architecture document\n\n")
 		b.WriteString(strings.TrimSpace(archDoc))
 		b.WriteString("\n\n")
 	}
-	b.WriteString("Using the brief and (if provided) the architecture document, produce a ranked list of hypotheses in the required format.")
+	b.WriteString("Using the brief and (if provided) the architecture document and prior codebase knowledge, produce a ranked list of hypotheses in the required format.")
 	return b.String()
 }
 
-func buildHypothesizeRetryPrompt(test jenkins.FailedTest, brief, archDoc, prevOutput, critique string) string {
+func buildHypothesizeRetryPrompt(test jenkins.FailedTest, brief, archDoc, memory, prevOutput, critique string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Your previous hypothesis list for **%s** was reviewed and found insufficient.\n\n", test.FullName())
 	b.WriteString("## What needs to be fixed\n\n")
@@ -249,6 +255,11 @@ func buildHypothesizeRetryPrompt(test jenkins.FailedTest, brief, archDoc, prevOu
 	b.WriteString("\n\n## Investigation brief (from LOGPARSE)\n\n")
 	b.WriteString(strings.TrimSpace(brief))
 	b.WriteString("\n\n")
+	if strings.TrimSpace(memory) != "" {
+		b.WriteString("## Prior codebase knowledge (from past investigations)\n\n")
+		b.WriteString(strings.TrimSpace(memory))
+		b.WriteString("\n\n")
+	}
 	if strings.TrimSpace(archDoc) != "" {
 		b.WriteString("## Architecture document\n\n")
 		b.WriteString(strings.TrimSpace(archDoc))
