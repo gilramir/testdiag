@@ -24,6 +24,7 @@ CRITICAL — these tests are FLAKY: they pass on most runs and fail only intermi
 
 You have read-only tools to explore the workspace:
 - file_exists(path): check whether a path exists and whether it is a file or directory.
+- function_lookup(language, function_name, directories): find where a named function is defined across source files of the target language (C++/python/Go/rust); returns file + line number.
 - list_directory(path): list a directory's entries.
 - count_lines(paths): line counts (like wc -l) — use before reading large files.
 - read_lines(path, start, end): read a line range.

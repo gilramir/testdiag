@@ -130,6 +130,7 @@ You are given:
 
 GUIDANCE:
 - Start from the key symbols and files named in the hypothesis; use file_exists to verify they exist before listing or reading them.
+- Use function_lookup(language, function_name, directories) to find where a named function is defined without writing a regex; it returns file + line number directly.
 - Use find_files and search_repo to locate relevant files by name, pattern, or content.
 - Use list_directory, grep, and read_lines to quickly confirm a file is relevant — do NOT read entire files.
 - Do NOT repeat a search you already performed; each tool call must add new information.

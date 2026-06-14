@@ -40,6 +40,7 @@ func toolDefs(ws *workspace.Workspace) []vnext.Tool {
 		&readFileTool{ws: ws},
 		&listDirTool{ws: ws},
 		&fileExistsTool{ws: ws},
+		&functionLookupTool{ws: ws},
 		&countLinesTool{ws: ws},
 		&readLinesTool{ws: ws},
 		&grepTool{ws: ws},
