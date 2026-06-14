@@ -258,11 +258,12 @@ func (t *searchRepoTool) populateCache(ctx context.Context, key, root, include s
 // searches.
 var logFileQueryRe = regexp.MustCompile(`(?i)^[\w./*?-]*?([\w*?-]*\.log|log\.txt)$`)
 
-// logHuntQuery returns the first search_repo argument (the grep pattern, the
-// include glob, or the path) that looks like an attempt to locate a log file, or
-// "" if none does.
+// logHuntQuery returns the first argument (across both search_repo and
+// find_files) that looks like an attempt to locate a log file, or "" if none
+// does. It checks every key either tool can receive so the guard works
+// regardless of which tool calls it.
 func logHuntQuery(args map[string]interface{}) string {
-	for _, key := range []string{"regex", "include_glob", "path"} {
+	for _, key := range []string{"regex", "pattern", "include_glob", "path"} {
 		if v, ok := strArg(args, key); ok && logFileQueryRe.MatchString(strings.TrimSpace(v)) {
 			return v
 		}
