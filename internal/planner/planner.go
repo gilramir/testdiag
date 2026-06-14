@@ -129,7 +129,7 @@ You are given:
 - A SPECIFIC HYPOTHESIS to plan around, which names key symbols and a suggested file list
 
 GUIDANCE:
-- Start from the key symbols and files named in the hypothesis; verify they exist and locate them precisely.
+- Start from the key symbols and files named in the hypothesis; use file_exists to verify they exist before listing or reading them.
 - Use find_files and search_repo to locate relevant files by name, pattern, or content.
 - Use list_directory, grep, and read_lines to quickly confirm a file is relevant — do NOT read entire files.
 - Do NOT repeat a search you already performed; each tool call must add new information.
