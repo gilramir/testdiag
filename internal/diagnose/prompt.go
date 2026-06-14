@@ -23,6 +23,7 @@ THERE ARE NO LOGS FOR YOU TO READ. The failure log has already been consumed and
 CRITICAL — these tests are FLAKY: they pass on most runs and fail only intermittently. The cause is almost never "the code is simply wrong" (that would fail every run). It is some source of NONDETERMINISM: a race, ordering assumption, timeout, resource limit, or environmental condition. If your explanation would predict the test always failing, keep looking.
 
 You have read-only tools to explore the workspace:
+- file_exists(path): check whether a path exists and whether it is a file or directory.
 - list_directory(path): list a directory's entries.
 - count_lines(paths): line counts (like wc -l) — use before reading large files.
 - read_lines(path, start, end): read a line range.

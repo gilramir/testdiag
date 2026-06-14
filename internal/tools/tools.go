@@ -39,6 +39,7 @@ func toolDefs(ws *workspace.Workspace) []vnext.Tool {
 	return []vnext.Tool{
 		&readFileTool{ws: ws},
 		&listDirTool{ws: ws},
+		&fileExistsTool{ws: ws},
 		&countLinesTool{ws: ws},
 		&readLinesTool{ws: ws},
 		&grepTool{ws: ws},
@@ -481,6 +482,48 @@ func (t *listDirTool) Execute(ctx context.Context, args map[string]interface{}) 
 		"path":      t.ws.Rel(abs),
 		"entries":   names,
 		"truncated": truncated,
+	}), nil
+}
+
+// ---------------------------------------------------------------------------
+// file_exists
+// ---------------------------------------------------------------------------
+
+type fileExistsTool struct{ ws *workspace.Workspace }
+
+func (t *fileExistsTool) Name() string { return "file_exists" }
+func (t *fileExistsTool) Description() string {
+	return "Report whether a workspace-relative path exists and whether it is a file or a directory. Never errors: unknown paths return exists=false."
+}
+func (t *fileExistsTool) JSONSchema() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"path": map[string]interface{}{
+				"type":        "string",
+				"description": "Workspace-relative path to check.",
+			},
+		},
+		"required": []string{"path"},
+	}
+}
+func (t *fileExistsTool) Execute(ctx context.Context, args map[string]interface{}) (*vnext.ToolResult, error) {
+	path, hasPath := strArg(args, "path")
+	if !hasPath {
+		return fail("file_exists: 'path' is required")
+	}
+	abs, err := t.ws.Resolve(path)
+	if err != nil {
+		return ok(map[string]interface{}{"path": path, "exists": false}), nil
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return ok(map[string]interface{}{"path": path, "exists": false}), nil
+	}
+	return ok(map[string]interface{}{
+		"path":   t.ws.Rel(abs),
+		"exists": true,
+		"is_dir": info.IsDir(),
 	}), nil
 }
 
