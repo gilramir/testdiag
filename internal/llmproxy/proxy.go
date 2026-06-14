@@ -88,6 +88,27 @@ func (p *Proxy) ResetCounter() { p.reqCounter.Store(0) }
 // response logged later can be correlated with the request that produced it.
 type debugIDKey struct{}
 
+// proxyLabelKey tags a request's context with the emitting proxy's label so the
+// response heartbeat (logged from ModifyResponse, which has no Proxy handle) can
+// name the same proxy the request did.
+type proxyLabelKey struct{}
+
+// label is the short proxy identifier shown in heartbeat lines (its listen
+// port). Because proxies are keyed by (endpoint, tool set), the port is enough
+// to tell, e.g., the tool-using PLANINSPECTION proxy from the tool-less FEEDBACK
+// proxy whose requests interleave in the same console phase — both first
+// requests are otherwise "2 message(s)". Correlate the port with the startup
+// "LLM proxy active: …:PORT … tools=N" banner to see which tool set it serves.
+func (p *Proxy) label() string {
+	if p.listener == nil {
+		return "?"
+	}
+	if addr, ok := p.listener.Addr().(*net.TCPAddr); ok {
+		return fmt.Sprintf(":%d", addr.Port)
+	}
+	return p.listener.Addr().String()
+}
+
 // Start launches the proxy in front of upstreamBaseURL (e.g.
 // http://localhost:1234/v1), listening on an ephemeral localhost port. The
 // proxy is serving by the time Start returns.
@@ -138,11 +159,13 @@ func Start(upstreamBaseURL string, opts Options) (*Proxy, error) {
 			}
 			if debug || heartbeat {
 				id := p.reqCounter.Add(1)
-				*req = *req.WithContext(context.WithValue(req.Context(), debugIDKey{}, id))
+				ctx := context.WithValue(req.Context(), debugIDKey{}, id)
+				ctx = context.WithValue(ctx, proxyLabelKey{}, p.label())
+				*req = *req.WithContext(ctx)
 				if debug {
 					logRequest(id, reqPath, body)
 				} else {
-					logRequestBrief(id, reqPath, body)
+					logRequestBrief(id, p.label(), reqPath, body)
 				}
 			}
 			setBody(req, body, raw)
@@ -284,7 +307,8 @@ func modifyResponse(resp *http.Response, normalize, debug, verbose bool) error {
 		logResponse(id, body)
 	} else if verbose {
 		id, _ := resp.Request.Context().Value(debugIDKey{}).(uint64)
-		logResponseBrief(id, body)
+		label, _ := resp.Request.Context().Value(proxyLabelKey{}).(string)
+		logResponseBrief(id, label, body)
 	}
 
 	if !changed {
@@ -411,18 +435,18 @@ var toolCallNameRE = regexp.MustCompile(`TOOL_CALL\s*\{\s*"name"\s*:\s*"([^"]+)"
 
 // logRequestBrief prints a one-line heartbeat for an outgoing request: message
 // count and advertised tool count. Used in verbose (non-debug) mode.
-func logRequestBrief(id uint64, path string, body map[string]interface{}) {
+func logRequestBrief(id uint64, label, path string, body map[string]interface{}) {
 	debugMu.Lock()
 	defer debugMu.Unlock()
 	msgs, _ := body["messages"].([]interface{})
 	tools, _ := body["tools"].([]interface{})
-	fmt.Fprintf(os.Stderr, "[llm] -> request #%d %s: %d message(s), %d tool(s) advertised\n",
-		id, path, len(msgs), len(tools))
+	fmt.Fprintf(os.Stderr, "[llm %s] -> request #%d %s: %d message(s), %d tool(s) advertised\n",
+		label, id, path, len(msgs), len(tools))
 }
 
 // logResponseBrief prints a one-line heartbeat for a response: which tool(s) the
 // model asked for, or the size of a plain-text answer, plus finish_reason.
-func logResponseBrief(id uint64, body map[string]interface{}) {
+func logResponseBrief(id uint64, label string, body map[string]interface{}) {
 	debugMu.Lock()
 	defer debugMu.Unlock()
 	desc := "no choices"
@@ -431,7 +455,7 @@ func logResponseBrief(id uint64, body map[string]interface{}) {
 			desc = describeChoiceBrief(choice)
 		}
 	}
-	fmt.Fprintf(os.Stderr, "[llm] <- response #%d: %s\n", id, desc)
+	fmt.Fprintf(os.Stderr, "[llm %s] <- response #%d: %s\n", label, id, desc)
 }
 
 // describeChoiceBrief summarizes one response choice: the tool calls it requests

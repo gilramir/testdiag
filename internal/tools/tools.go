@@ -10,6 +10,7 @@ package tools
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
@@ -63,6 +64,16 @@ var verbose atomic.Bool
 
 // SetVerbose enables or disables the per-tool progress logging emitted to stderr.
 func SetVerbose(v bool) { verbose.Store(v) }
+
+// debug, when set, makes the loggingTool wrapper print each tool call's COMPLETE
+// result to stderr — the exact, untruncated Content that AGK feeds back to the
+// LLM. The verbose start/done lines and the tool log only show summaries; this is
+// for an operator who wants to see precisely what the model receives. Like
+// verbose it is a process-global because the tools are shared singletons.
+var debug atomic.Bool
+
+// SetDebug enables or disables full tool-result logging to stderr.
+func SetDebug(v bool) { debug.Store(v) }
 
 // logToolsEnabled gates the log-reading tools (read_log, grep_log). The
 // DEEPINSPECT stage turns it off so the agent works only from the LOGPARSE
@@ -222,7 +233,39 @@ func (t *loggingTool) Execute(ctx context.Context, args map[string]interface{}) 
 	} else if err != nil {
 		appendToolCall(name, args, err.Error(), true)
 	}
+	if debug.Load() {
+		logFullResult(name, args, res, err)
+	}
 	return res, err
+}
+
+// logFullResult prints a tool call's complete, untruncated result to stderr so an
+// operator running with --debug sees exactly what AGK will feed back to the LLM.
+func logFullResult(name string, args map[string]interface{}, res *vnext.ToolResult, err error) {
+	var body string
+	switch {
+	case err != nil:
+		body = "error: " + err.Error()
+	case res == nil:
+		body = "(nil result)"
+	default:
+		body = fullValue(res.Content)
+	}
+	fmt.Fprintf(os.Stderr, "\n========== tool result: %s(%s) ==========\n%s\n%s\n",
+		name, briefArgs(args), body, strings.Repeat("=", 40))
+}
+
+// fullValue renders a tool result value in full, without truncation: strings
+// verbatim, everything else as indented JSON (falling back to %v if it cannot be
+// marshaled). Unlike summarizeValue it never elides content.
+func fullValue(v interface{}) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	if out, err := json.MarshalIndent(v, "", "  "); err == nil {
+		return string(out)
+	}
+	return fmt.Sprintf("%v", v)
 }
 
 // briefArgs renders a tool's arguments as a compact, sorted "key=val" line, with

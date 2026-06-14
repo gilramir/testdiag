@@ -135,6 +135,7 @@ func run(opts *options) error {
 	// Register the workspace file tools once. Exclude the output directory from
 	// tree searches so the agent never reads its own generated reports.
 	tools.SetVerbose(opts.Verbose)
+	tools.SetDebug(cfg.Proxy.Debug)
 	tools.ExcludeDir(filepath.Base(cfg.Output.Dir))
 	toolNames := tools.Register(ws)
 
