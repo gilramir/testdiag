@@ -65,6 +65,32 @@ func TestSearchRepo(t *testing.T) {
 	}
 }
 
+func TestSearchRepoCaseSensitivity(t *testing.T) {
+	ws, _ := setupWS(t)
+	ResetSearchCache()
+	t.Cleanup(ResetSearchCache)
+	tool := &searchRepoTool{ws: ws}
+
+	// Default is case-insensitive: an upper-case regex still matches.
+	res, err := tool.Execute(context.Background(), map[string]interface{}{"regex": `DEF CONNECT`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(res.Content.(map[string]interface{})["matches"].([]map[string]interface{})); n == 0 {
+		t.Fatal("default search should be case-insensitive and match 'def connect'")
+	}
+
+	// case_sensitive=true: the upper-case regex no longer matches.
+	ResetSearchCache()
+	res, err = tool.Execute(context.Background(), map[string]interface{}{"regex": `DEF CONNECT`, "case_sensitive": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(res.Content.(map[string]interface{})["matches"].([]map[string]interface{})); n != 0 {
+		t.Fatalf("case_sensitive search should not match 'def connect', got %d matches", n)
+	}
+}
+
 func TestSearchRepoRefusesLogHuntWhenWithheld(t *testing.T) {
 	ws, _ := setupWS(t)
 	ResetSearchCache()
@@ -250,6 +276,68 @@ func TestFindFiles(t *testing.T) {
 	paths = res.Content.(map[string]interface{})["paths"].([]string)
 	if len(paths) != 1 || paths[0] != "server/src/foo.cc" {
 		t.Fatalf("substring: want [server/src/foo.cc], got %v", paths)
+	}
+}
+
+func TestFindFilesCaseInsensitiveByDefault(t *testing.T) {
+	ws, _ := setupWS(t)
+	ResetFindFilesCache()
+	t.Cleanup(ResetFindFilesCache)
+	tool := &findFilesTool{ws: ws}
+
+	// Default: case-insensitive, both substring and glob.
+	for _, pat := range []string{"FOO_CLIENT.PY", "*CLIENT.PY"} {
+		ResetFindFilesCache()
+		res, err := tool.Execute(context.Background(), map[string]interface{}{"pattern": pat})
+		if err != nil {
+			t.Fatal(err)
+		}
+		paths := res.Content.(map[string]interface{})["paths"].([]string)
+		if len(paths) != 1 || paths[0] != "client/foo_client.py" {
+			t.Fatalf("pattern %q (ci default): want [client/foo_client.py], got %v", pat, paths)
+		}
+	}
+
+	// case_sensitive=true: the upper-case pattern no longer matches.
+	ResetFindFilesCache()
+	res, err := tool.Execute(context.Background(), map[string]interface{}{"pattern": "FOO_CLIENT.PY", "case_sensitive": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Content.(map[string]interface{})["count"].(int) != 0 {
+		t.Fatalf("case_sensitive should not match upper-case pattern")
+	}
+}
+
+func TestFindFilesSameFilenameFallback(t *testing.T) {
+	ws, _ := setupWS(t)
+	ResetFindFilesCache()
+	t.Cleanup(ResetFindFilesCache)
+	tool := &findFilesTool{ws: ws}
+
+	// A wrong directory means the primary search finds nothing, but the fallback
+	// should surface the file by its base name elsewhere in the tree.
+	res, err := tool.Execute(context.Background(), map[string]interface{}{"pattern": "wrong/place/foo_client.py"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := res.Content.(map[string]interface{})
+	if c["count"].(int) != 0 {
+		t.Fatalf("want 0 direct matches, got %v", c["count"])
+	}
+	same, ok := c["same_filename_matches"].([]string)
+	if !ok || len(same) != 1 || same[0] != "client/foo_client.py" {
+		t.Fatalf("want same_filename_matches [client/foo_client.py], got %v", c["same_filename_matches"])
+	}
+	if msg, _ := c["message"].(string); !strings.Contains(msg, "same filename") {
+		t.Errorf("message should mention the same-filename fallback, got %q", msg)
+	}
+
+	// A truly absent filename yields no fallback candidates.
+	ResetFindFilesCache()
+	res2, _ := tool.Execute(context.Background(), map[string]interface{}{"pattern": "wrong/place/nope.zzz"})
+	if _, present := res2.Content.(map[string]interface{})["same_filename_matches"]; present {
+		t.Error("absent filename should not produce same_filename_matches")
 	}
 }
 

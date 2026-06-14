@@ -57,10 +57,16 @@ func ingest(store *knowledge.Store, c toolproto.Call, res *tools.Result, err err
 
 	case "find_files":
 		label := strv(c.Args, "pattern", "")
-		paths := strSlice(m, "paths")
-		store.AddSearch("find_files", label, paths)
-		if len(paths) == 0 {
-			store.SetSearchNote("find_files", label, "no matches")
+		if paths := strSlice(m, "paths"); len(paths) > 0 {
+			store.AddSearch("find_files", label, paths)
+		} else if same := strSlice(m, "same_filename_matches"); len(same) > 0 {
+			// No direct hit, but files with the same name exist elsewhere — record
+			// them as candidates so the agent can pick the right path.
+			store.AddSearch("find_files", label, same)
+			store.SetSearchNote("find_files", label, "no direct match; files with the same filename found elsewhere:")
+		} else {
+			store.AddSearch("find_files", label, nil)
+			store.SetSearchNote("find_files", label, "no matches anywhere")
 		}
 
 	case "file_exists":

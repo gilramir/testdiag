@@ -437,15 +437,6 @@ func boolArg(args map[string]interface{}, key string) bool {
 	return b
 }
 
-// boolArgDefault returns the boolean value of key in args, or def when the key
-// is absent or not a bool.
-func boolArgDefault(args map[string]interface{}, key string, def bool) bool {
-	if v, ok := args[key].(bool); ok {
-		return v
-	}
-	return def
-}
-
 // ---------------------------------------------------------------------------
 // read_file
 // ---------------------------------------------------------------------------
@@ -747,15 +738,15 @@ type grepTool struct{ ws *workspace.Workspace }
 
 func (t *grepTool) Name() string { return "grep" }
 func (t *grepTool) Description() string {
-	return "Search a single workspace file for a regular-expression pattern and return matching lines with their 1-based line numbers. Use this to locate symbols, errors, or definitions in large files."
+	return "Search a single workspace file for a regular-expression pattern and return matching lines with their 1-based line numbers. Matching is case-insensitive by default (set case_sensitive=true to require an exact-case match). Use this to locate symbols, errors, or definitions in large files."
 }
 func (t *grepTool) JSONSchema() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
-			"path":        map[string]interface{}{"type": "string", "description": "Workspace-relative file path to search."},
-			"pattern":     map[string]interface{}{"type": "string", "description": "RE2 regular expression to match against each line."},
-			"ignore_case": map[string]interface{}{"type": "boolean", "description": "Case-insensitive match (default true)."},
+			"path":           map[string]interface{}{"type": "string", "description": "Workspace-relative file path to search."},
+			"pattern":        map[string]interface{}{"type": "string", "description": "RE2 regular expression to match against each line."},
+			"case_sensitive": map[string]interface{}{"type": "boolean", "description": "Require an exact-case match. Defaults to false (matching is case-insensitive)."},
 		},
 		"required": []string{"path", "pattern"},
 	}
@@ -770,7 +761,8 @@ func (t *grepTool) Execute(ctx context.Context, args map[string]interface{}) (*R
 		return fail("grep: 'pattern' is required")
 	}
 	expr := pattern
-	if boolArgDefault(args, "ignore_case", true) {
+	// Matching is case-insensitive by default; case_sensitive=true opts out.
+	if !boolArg(args, "case_sensitive") {
 		expr = "(?i)" + expr
 	}
 	re, err := regexp.Compile(expr)

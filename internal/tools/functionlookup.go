@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"strings"
 
-
 	"github.com/gilbertr/testdiag/internal/workspace"
 )
 

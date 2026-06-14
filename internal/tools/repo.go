@@ -4,15 +4,16 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"sync"
-
 
 	"github.com/gilbertr/testdiag/internal/workspace"
 )
@@ -20,10 +21,10 @@ import (
 // Caps for the tree-walking tools. They protect both the context window and the
 // wall-clock cost of crawling a large checkout.
 const (
-	maxRepoMatches  = 200   // max matches returned per page by search_repo (no offset/limit)
-	maxRepoCacheSize = 2000 // max matches stored in the full search cache
-	maxFindResults  = 500   // max paths returned by find_files
-	maxFilesScanned = 20000 // max files visited by a single walk
+	maxRepoMatches   = 200   // max matches returned per page by search_repo (no offset/limit)
+	maxRepoCacheSize = 2000  // max matches stored in the full search cache
+	maxFindResults   = 500   // max paths returned by find_files
+	maxFilesScanned  = 20000 // max files visited by a single walk
 )
 
 // skipDirs are directory names never descended into by search_repo / find_files.
@@ -94,18 +95,18 @@ type searchRepoTool struct{ ws *workspace.Workspace }
 
 func (t *searchRepoTool) Name() string { return "search_repo" }
 func (t *searchRepoTool) Description() string {
-	return "Recursively search the workspace tree for a regular-expression pattern and return matching lines. Results are cached after the first call: repeating the same search (same regex, path, include_glob, ignore_case) with a different offset/limit is instant and does NOT re-scan the tree. Use offset+limit to page through a large result set rather than repeating the search. This crawls the WHOLE tree and can be slow, so prefer narrower lookups first: if you already know a symbol is imported, follow its import to the defining file and grep that file instead; and when you must search, pass an include_glob (e.g. *.py) and search for the definition (e.g. 'def name'/'class name') rather than every use. Skips VCS, dependency, and build directories and binary files."
+	return "Recursively search the workspace tree for a regular-expression pattern and return matching lines. Matching is case-insensitive by default (set case_sensitive=true to require an exact-case match). Results are cached after the first call: repeating the same search (same regex, path, include_glob, case_sensitive) with a different offset/limit is instant and does NOT re-scan the tree. Use offset+limit to page through a large result set rather than repeating the search. This crawls the WHOLE tree and can be slow, so prefer narrower lookups first: if you already know a symbol is imported, follow its import to the defining file and grep that file instead; and when you must search, pass an include_glob (e.g. *.py) and search for the definition (e.g. 'def name'/'class name') rather than every use. Skips VCS, dependency, and build directories and binary files."
 }
 func (t *searchRepoTool) JSONSchema() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
-			"regex":        map[string]interface{}{"type": "string", "description": "RE2 regular expression to match against each line."},
-			"path":         map[string]interface{}{"type": "string", "description": "Workspace-relative directory to limit the search to. Defaults to the whole workspace ('.')."},
-			"include_glob": map[string]interface{}{"type": "string", "description": "Optional filename glob to restrict which files are searched (e.g. *.py or *Test.java)."},
-			"ignore_case":  map[string]interface{}{"type": "boolean", "description": "Case-insensitive match (default true)."},
-			"offset":       map[string]interface{}{"type": "integer", "description": "0-based index of the first match to return. Use with limit to page through large result sets. The result set is cached after the first call, so paging is free."},
-			"limit":        map[string]interface{}{"type": "integer", "description": "Maximum number of matches to return. Defaults to all matches from offset onward (up to the per-call cap when no offset is given)."},
+			"regex":          map[string]interface{}{"type": "string", "description": "RE2 regular expression to match against each line."},
+			"path":           map[string]interface{}{"type": "string", "description": "Workspace-relative directory to limit the search to. Defaults to the whole workspace ('.')."},
+			"include_glob":   map[string]interface{}{"type": "string", "description": "Optional filename glob to restrict which files are searched (e.g. *.py or *Test.java)."},
+			"case_sensitive": map[string]interface{}{"type": "boolean", "description": "Require an exact-case match. Defaults to false (matching is case-insensitive)."},
+			"offset":         map[string]interface{}{"type": "integer", "description": "0-based index of the first match to return. Use with limit to page through large result sets. The result set is cached after the first call, so paging is free."},
+			"limit":          map[string]interface{}{"type": "integer", "description": "Maximum number of matches to return. Defaults to all matches from offset onward (up to the per-call cap when no offset is given)."},
 		},
 		"required": []string{"regex"},
 	}
@@ -125,7 +126,8 @@ func (t *searchRepoTool) Execute(ctx context.Context, args map[string]interface{
 		}
 	}
 
-	ignoreCase := boolArgDefault(args, "ignore_case", true)
+	// Matching is case-insensitive by default; case_sensitive=true opts out.
+	ignoreCase := !boolArg(args, "case_sensitive")
 	expr := pattern
 	if ignoreCase {
 		expr = "(?i)" + expr
@@ -281,6 +283,10 @@ func logHuntQuery(args map[string]interface{}) string {
 type findFilesCacheEntry struct {
 	paths     []string
 	truncated bool
+	// sameName holds the fallback result computed when paths is empty: files
+	// anywhere in the workspace whose base name matches the non-directory part of
+	// the pattern, so a repeat of a zero-result call still offers the same hints.
+	sameName []string
 }
 
 var (
@@ -312,15 +318,15 @@ type findFilesTool struct{ ws *workspace.Workspace }
 
 func (t *findFilesTool) Name() string { return "find_files" }
 func (t *findFilesTool) Description() string {
-	return "Find files in the workspace whose name matches a glob (e.g. *Test.java, foo_client.py) or whose path contains a substring. Returns workspace-relative paths. Use this to locate a test's source file instead of crawling directories by hand. Results are cached: if a pattern previously returned no files, a repeat call will immediately tell you so — do not retry the same pattern."
+	return "Find files in the workspace whose name matches a glob (e.g. *Test.java, foo_client.py) or whose path contains a substring. Returns workspace-relative paths. Matching is case-insensitive by default (set case_sensitive=true to require an exact-case match). If nothing matches, the directory part of the pattern is dropped and the workspace is searched for any file with that filename anywhere — those are returned under same_filename_matches so you can pick the right one. Use this to locate a test's source file instead of crawling directories by hand. Results are cached: a repeated zero-result call returns the same answer immediately — do not retry the same pattern."
 }
 func (t *findFilesTool) JSONSchema() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
-			"pattern":     map[string]interface{}{"type": "string", "description": "Filename glob (e.g. *Test.java) matched against each file's name, or a plain substring matched against the full path."},
-			"path":        map[string]interface{}{"type": "string", "description": "Workspace-relative directory to limit the search to. Defaults to the whole workspace ('.')."},
-			"ignore_case": map[string]interface{}{"type": "boolean", "description": "Case-insensitive match (default false)."},
+			"pattern":        map[string]interface{}{"type": "string", "description": "Filename glob (e.g. *Test.java) matched against each file's name, or a plain substring matched against the full path."},
+			"path":           map[string]interface{}{"type": "string", "description": "Workspace-relative directory to limit the search to. Defaults to the whole workspace ('.')."},
+			"case_sensitive": map[string]interface{}{"type": "boolean", "description": "Require an exact-case match. Defaults to false (matching is case-insensitive)."},
 		},
 		"required": []string{"pattern"},
 	}
@@ -343,7 +349,8 @@ func (t *findFilesTool) Execute(ctx context.Context, args map[string]interface{}
 	if p, ok := strArg(args, "path"); ok {
 		base = p
 	}
-	ci := boolArg(args, "ignore_case")
+	// Matching is case-insensitive by default; case_sensitive=true opts out.
+	ci := !boolArg(args, "case_sensitive")
 
 	// Check the cache before resolving the path or walking the tree.
 	cacheKey := findFilesCacheKey(pattern, base, ci)
@@ -353,15 +360,7 @@ func (t *findFilesTool) Execute(ctx context.Context, args map[string]interface{}
 
 	if hit {
 		if len(cached.paths) == 0 {
-			return ok(map[string]interface{}{
-				"paths":            []string{},
-				"count":            0,
-				"truncated":        false,
-				"no_results_cached": true,
-				"message": "No files matched this pattern in a previous search. " +
-					"The workspace does not contain files matching this pattern — " +
-					"do not retry with the same arguments; try a different pattern instead.",
-			}), nil
+			return zeroResult(cached.sameName, true), nil
 		}
 		return ok(map[string]interface{}{
 			"paths":     cached.paths,
@@ -375,12 +374,43 @@ func (t *findFilesTool) Execute(ctx context.Context, args map[string]interface{}
 		return fail("find_files: %v", err)
 	}
 
-	var paths []string
-	filesScanned := 0
-	truncated := false
+	paths, truncated, err := t.walkMatch(ctx, root, func(rel, name string) bool {
+		return matchPath(pattern, rel, name, ci)
+	})
+	if err != nil {
+		return fail("find_files: %v", err)
+	}
 
-	walkErr := filepath.WalkDir(root, func(abs string, d fs.DirEntry, err error) error {
-		if err != nil {
+	// Zero results: drop the directory part of the pattern and look for any file
+	// with that filename anywhere in the workspace, so the model gets candidate
+	// paths instead of a dead end.
+	var sameName []string
+	if len(paths) == 0 {
+		sameName = t.findSameFilename(ctx, pattern, base)
+	}
+
+	// Store result in cache (including empty results — that's the main point).
+	findFilesCacheMu.Lock()
+	findFilesCacheStore[cacheKey] = &findFilesCacheEntry{paths: paths, truncated: truncated, sameName: sameName}
+	findFilesCacheMu.Unlock()
+
+	if len(paths) == 0 {
+		return zeroResult(sameName, false), nil
+	}
+	return ok(map[string]interface{}{
+		"paths":     paths,
+		"count":     len(paths),
+		"truncated": truncated,
+	}), nil
+}
+
+// walkMatch walks root and returns the workspace-relative paths of files for
+// which match(rel, baseName) is true, honoring the same dir-skipping and caps as
+// the primary find_files walk.
+func (t *findFilesTool) walkMatch(ctx context.Context, root string, match func(rel, name string) bool) (paths []string, truncated bool, err error) {
+	filesScanned := 0
+	walkErr := filepath.WalkDir(root, func(abs string, d fs.DirEntry, werr error) error {
+		if werr != nil {
 			return nil
 		}
 		if ctx.Err() != nil {
@@ -398,7 +428,7 @@ func (t *findFilesTool) Execute(ctx context.Context, args map[string]interface{}
 		}
 		filesScanned++
 		rel := filepath.ToSlash(t.ws.Rel(abs))
-		if matchPath(pattern, rel, d.Name(), ci) {
+		if match(rel, d.Name()) {
 			if len(paths) >= maxFindResults {
 				truncated = true
 				return filepath.SkipAll
@@ -408,20 +438,68 @@ func (t *findFilesTool) Execute(ctx context.Context, args map[string]interface{}
 		return nil
 	})
 	if walkErr != nil && ctx.Err() != nil {
-		return fail("find_files: %v", ctx.Err())
+		return nil, false, ctx.Err()
 	}
 	sort.Strings(paths)
+	return paths, truncated, nil
+}
 
-	// Store result in cache (including empty results — that's the main point).
-	findFilesCacheMu.Lock()
-	findFilesCacheStore[cacheKey] = &findFilesCacheEntry{paths: paths, truncated: truncated}
-	findFilesCacheMu.Unlock()
+// findSameFilename implements the zero-result fallback: it takes the
+// non-directory part of the pattern and searches the WHOLE workspace for files
+// whose base name matches it. It returns nil when the fallback could not differ
+// from the primary search (a directory-less pattern already searched from the
+// workspace root), and is always case-insensitive so a near-miss on case still
+// surfaces candidates.
+func (t *findFilesTool) findSameFilename(ctx context.Context, pattern, base string) []string {
+	needle := path.Base(strings.TrimPrefix(pattern, "**/"))
+	hadDir := strings.Contains(strings.TrimPrefix(pattern, "**/"), "/")
+	if needle == "" || needle == "." {
+		return nil
+	}
+	// If the pattern has no directory part and we already searched from the root,
+	// a base-name search over the root would repeat the primary search.
+	if !hadDir && base == "." {
+		return nil
+	}
+	root, err := t.ws.Resolve(".")
+	if err != nil {
+		return nil
+	}
+	paths, _, err := t.walkMatch(ctx, root, func(_, name string) bool {
+		return matchBaseName(needle, name, true)
+	})
+	if err != nil {
+		return nil
+	}
+	return paths
+}
 
-	return ok(map[string]interface{}{
-		"paths":     paths,
-		"count":     len(paths),
-		"truncated": truncated,
-	}), nil
+// zeroResult builds the find_files response for a search that matched nothing,
+// attaching any same-filename candidates found elsewhere in the workspace. When
+// cached is true the result is being replayed from the negative cache, so it
+// also tells the model not to retry.
+func zeroResult(sameName []string, cached bool) *Result {
+	msg := "No files matched this pattern."
+	if cached {
+		msg += " (Served from a previous search — do not retry the same arguments.)"
+	}
+	if len(sameName) > 0 {
+		msg += fmt.Sprintf(" However, %d file(s) with the same filename exist elsewhere in the workspace "+
+			"(see same_filename_matches) — one of these may be the file you want.", len(sameName))
+	}
+	out := map[string]interface{}{
+		"paths":     []string{},
+		"count":     0,
+		"truncated": false,
+		"message":   msg,
+	}
+	if cached {
+		out["no_results_cached"] = true
+	}
+	if len(sameName) > 0 {
+		out["same_filename_matches"] = sameName
+	}
+	return ok(out)
 }
 
 // matchPath reports whether a file matches the find_files pattern. A pattern
@@ -431,13 +509,18 @@ func (t *findFilesTool) Execute(ctx context.Context, args map[string]interface{}
 func matchPath(pattern, rel, base string, ci bool) bool {
 	p := strings.TrimPrefix(pattern, "**/")
 	if strings.ContainsAny(pattern, "*?[") {
-		if m, _ := filepath.Match(p, base); m {
+		// filepath.Match has no case-insensitive mode; fold both sides when ci.
+		full, p2, b, r := pattern, p, base, rel
+		if ci {
+			full, p2, b, r = strings.ToLower(pattern), strings.ToLower(p), strings.ToLower(base), strings.ToLower(rel)
+		}
+		if m, _ := filepath.Match(p2, b); m {
 			return true
 		}
-		if m, _ := filepath.Match(pattern, rel); m {
+		if m, _ := filepath.Match(full, r); m {
 			return true
 		}
-		if m, _ := filepath.Match(p, rel); m {
+		if m, _ := filepath.Match(p2, r); m {
 			return true
 		}
 		return false
@@ -447,6 +530,27 @@ func matchPath(pattern, rel, base string, ci bool) bool {
 		needle, hay = strings.ToLower(pattern), strings.ToLower(rel)
 	}
 	return strings.Contains(hay, needle)
+}
+
+// matchBaseName reports whether a file's base name matches the non-directory
+// needle used by the find_files zero-result fallback: a glob needle is matched
+// against the base name with filepath.Match; a plain needle matches when the
+// base name contains it. Case-insensitive when ci.
+func matchBaseName(needle, base string, ci bool) bool {
+	n := strings.TrimPrefix(needle, "**/")
+	if strings.ContainsAny(n, "*?[") {
+		pat, b := n, base
+		if ci {
+			pat, b = strings.ToLower(n), strings.ToLower(base)
+		}
+		m, _ := filepath.Match(pat, b)
+		return m
+	}
+	nd, hay := n, base
+	if ci {
+		nd, hay = strings.ToLower(n), strings.ToLower(base)
+	}
+	return strings.Contains(hay, nd)
 }
 
 // binarySniffLen is how many leading bytes searchFile inspects to decide a file

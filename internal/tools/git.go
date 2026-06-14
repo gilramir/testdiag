@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-
 	"github.com/gilbertr/testdiag/internal/workspace"
 )
 

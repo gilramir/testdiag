@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 
-
 	"github.com/gilbertr/testdiag/internal/workspace"
 )
 

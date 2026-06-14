@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-
 	"github.com/gilbertr/testdiag/internal/workspace"
 )
 
