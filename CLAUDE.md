@@ -20,7 +20,7 @@ DOWNLOAD → LOGPARSE → FEEDBACK → HYPOTHESIZE → FEEDBACK →
 - **FEEDBACK** — gate on the hypothesis list (`hypothesize_max_feedbacks`)
 - **DEEPINSPECT × N** — one fresh agent per hypothesis, jailed to the workspace source tools; investigates whether that hypothesis is CONFIRMED / REFUTED / INCONCLUSIVE
 - **FEEDBACK per DEEPINSPECT** — gate on each DEEPINSPECT result (`deepinspect_max_feedbacks`); a failed hypothesis is soft-failed (noted but does not stop the pipeline)
-- **SUMMARIZE** — tool-less LLM pass that summarizes each hypothesis (noting whether an inspection result is available or not), then identifies the most likely root cause
+- **SUMMARIZE** — tool-less LLM pass; for each hypothesis writes a paragraph explaining what DEEPINSPECT found (or explicitly noting no result if the inspection failed or was not run), then adds a "Most Likely Root Cause" verdict
 - **FEEDBACK** — gate on the summary (`summarize_max_feedbacks`)
 
 Each stage hands off to the next through a Markdown file on disk (`.testdiag/handoff/`) and each LLM can be configured independently. Different LLMs can be assigned to different stages so a cheap model can parse the log while a stronger one does the source tracing.
@@ -90,9 +90,15 @@ The pipeline is sequential: fetch failures → run each failure through the stag
     `diagnose.Diagnoser.Diagnose` per hypothesis, runs FEEDBACK on each result, and
     soft-fails any hypothesis whose agent errored or whose feedback was exhausted;
     results accumulate in `sc.DeepInspects`
-  - `summarize.go` — tool-less agent summarizes each hypothesis (noting whether an
-    inspection result is available) and identifies the most likely root cause
-    (`.testdiag/handoff/<test>.summarize.md`)
+  - `summarize.go` — tool-less agent that produces two things: (1) for each
+    hypothesis, a short paragraph — if a DEEPINSPECT result exists it explains
+    what was found (confirmed/refuted/inconclusive) and the key evidence; if the
+    inspection failed or was not run it says so explicitly rather than skipping
+    or speculating; (2) a "Most Likely Root Cause" section that names the
+    best-supported hypothesis (or states that none is well-supported). Output is
+    written to `.testdiag/handoff/<test>.summarize.md`; retries with FEEDBACK
+    critique up to `maxFeedbacks` times. The FEEDBACK gate checks that every
+    hypothesis has a section and that the most-likely verdict is present.
   - `feedback.go` — `feedbackChecker` is a shared struct with a configurable
     `systemPrompt` field; each stage gate uses a different prompt constant
     (`logParseFeedbackPrompt`, `hypothesizeFeedbackPrompt`, `deepInspectFeedbackPrompt`,
