@@ -203,13 +203,21 @@ func (t *loggingTool) Execute(ctx context.Context, args map[string]interface{}) 
 		}
 	}
 
+	var res *vnext.ToolResult
+	var err error
 	if !verbose.Load() {
-		return t.inner.Execute(ctx, args)
+		res, err = t.inner.Execute(ctx, args)
+	} else {
+		vlogf("%s start: %s", name, briefArgs(args))
+		start := time.Now()
+		res, err = t.inner.Execute(ctx, args)
+		vlogf("%s done in %s%s", name, time.Since(start).Round(time.Millisecond), outcome(res, err))
 	}
-	vlogf("%s start: %s", name, briefArgs(args))
-	start := time.Now()
-	res, err := t.inner.Execute(ctx, args)
-	vlogf("%s done in %s%s", name, time.Since(start).Round(time.Millisecond), outcome(res, err))
+	if res != nil {
+		appendToolCall(name, args, res.Content, !res.Success)
+	} else if err != nil {
+		appendToolCall(name, args, err.Error(), true)
+	}
 	return res, err
 }
 

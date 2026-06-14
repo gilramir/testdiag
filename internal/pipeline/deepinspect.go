@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gilbertr/testdiag/internal/diagnose"
+	"github.com/gilbertr/testdiag/internal/tools"
 	"github.com/gilbertr/testdiag/internal/workspace"
 )
 
@@ -45,7 +46,10 @@ func (s *deepInspectAllStage) Run(ctx context.Context, sc *Context) error {
 		if i < len(sc.Plans) && !sc.Plans[i].Failed {
 			planContent = sc.Plans[i].Content
 		}
-		sc.DeepInspects = append(sc.DeepInspects, s.runOne(ctx, sc, h, planContent))
+		tools.ResetToolLog()
+		out := s.runOne(ctx, sc, h, planContent)
+		s.writeToolLog(sc, h, tools.CollectToolLog())
+		sc.DeepInspects = append(sc.DeepInspects, out)
 	}
 	return nil
 }
@@ -127,6 +131,16 @@ func (s *deepInspectAllStage) runOne(ctx context.Context, sc *Context, h Hypothe
 		prevResult = res.Content
 		critique = newCritique
 	}
+}
+
+func (s *deepInspectAllStage) writeToolLog(sc *Context, h Hypothesis, calls []tools.ToolCall) {
+	dir := filepath.Join(s.ws.Root(), handoffDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	base := fmt.Sprintf("%s.h%d.deepinspect.tools.md", sanitize(sc.Test.FullName()), h.Index)
+	header := fmt.Sprintf("# Tool Log (DEEPINSPECT) h%d: %s\n\n", h.Index, sc.Test.FullName())
+	_ = os.WriteFile(filepath.Join(dir, base), []byte(header+tools.FormatToolLog(calls)), 0o644)
 }
 
 // save writes the DEEPINSPECT result to a handoff file so the distillation

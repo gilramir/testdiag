@@ -21,8 +21,8 @@ Given a Jenkins build URL:
 
    ```
    DOWNLOAD → LOGPARSE → FEEDBACK → HYPOTHESIZE → FEEDBACK →
-   [PLANINSPECTION → FEEDBACK → DEEPINSPECT → FEEDBACK] × N → SUMMARIZE → FEEDBACK
-   → MEMORIZE
+   [PLANINSPECTION → FEEDBACK → DEEPINSPECT → FEEDBACK] × N →
+   SUMMARIZE → FEEDBACK → LESSONS → MEMORIZE
    ```
 
    | Stage | Goal | Tools |
@@ -38,6 +38,7 @@ Given a Jenkins build URL:
    | FEEDBACK | Accept result or return critique | — |
    | SUMMARIZE | Summarize each hypothesis (noting whether an inspection result exists), then identify the most likely root cause | — |
    | FEEDBACK | Accept synthesis or return critique | — |
+   | LESSONS | Meta-analysis of this testdiag run; developer-facing suggestions for improving prompts, tools, and stage design | — |
    | MEMORIZE | Extract durable codebase facts → `.testdiag/memory.md` | — |
 
    *Workspace source tools* = `read_file`, `list_directory`, `count_lines`, `read_lines`, `grep`, `search_repo`, `find_files`, `run_script`, `notebook`. The raw-log tools (`read_log`, `grep_log`) are withheld from both PLANINSPECTION and DEEPINSPECT; those stages work from the brief alone.
@@ -82,6 +83,17 @@ Given a Jenkins build URL:
      (`.testdiag/handoff/<test>.summarize.md`).
    - **FEEDBACK** — checks the summarized analysis; retries up to
      `summarize_max_feedbacks` times.
+
+   - **LESSONS** — a tool-less LLM reads every handoff file written during the
+     run (including the **tool logs** for PLANINSPECTION and DEEPINSPECT — compact
+     per-call summaries of each tool name, arguments, and response size, stored at
+     `.testdiag/handoff/<test>.h<N>.(plan|deep)inspect.tools.md`) plus the
+     optional architecture document. It produces a developer-facing meta-analysis
+     — **not** a user-facing report — evaluating how testdiag performed on this
+     particular diagnosis and suggesting concrete improvements to the program:
+     better prompts, more targeted tool designs, restructured stage handoffs, or
+     anything that worked especially well and should be preserved
+     (`.testdiag/handoff/<test>.lessons.md`). There is no feedback gate for LESSONS.
 
    - **MEMORIZE** — after the report is written, a tool-less LLM reads all the
      pipeline handoff files for that test and extracts **durable, reusable
@@ -131,8 +143,15 @@ context window.
 
 The two log tools are not advertised to PLANINSPECTION or DEEPINSPECT and are
 hard-disabled while either runs, so neither can re-read the raw log — both work from
-the brief. All other stages (LOGPARSE, HYPOTHESIZE, FEEDBACK, SUMMARIZE, MEMORIZE) use
-no tools; their inputs are given inline.
+the brief. All other stages (LOGPARSE, HYPOTHESIZE, FEEDBACK, SUMMARIZE, LESSONS,
+MEMORIZE) use no tools; their inputs are given inline.
+
+**Tool logs** — after each PLANINSPECTION and DEEPINSPECT hypothesis run, testdiag
+writes a compact tool-call log to
+`.testdiag/handoff/<test>.h<N>.(plan|deep)inspect.tools.md`. Each entry records the
+tool name, arguments, and a summary of the response (item count for lists, character
+and line count for strings — not the full content). These logs are picked up
+automatically by LESSONS and are also useful for debugging.
 
 The prompt steers the model to `count_lines`/`grep`/`read_lines` rather than
 dumping whole files, so large sources stay within context.
@@ -188,18 +207,19 @@ deepinspect = "deep"   # gets the brief + plan + source tools, finds the root ca
 # Optional: override individual stages
 # planinspection           = "deep"   # surveys workspace for relevant files; defaults to deepinspect LLM
 # hypothesize              = "fast"   # all others default to logparse LLM
-# summarize                  = "fast"
+# summarize                = "fast"
+# lessons                  = "fast"   # meta-analysis; defaults to logparse LLM
 # memorize                 = "fast"   # post-test distillation; defaults to logparse LLM
 # logparse_feedback        = "fast"
 # hypothesize_feedback     = "fast"
 # planinspection_feedback  = "fast"
 # deepinspect_feedback     = "fast"
-# summarize_feedback         = "fast"
+# summarize_feedback       = "fast"
 ```
 
 The two required stages are `logparse` and `deepinspect`. PLANINSPECTION defaults to
-the deepinspect LLM; MEMORIZE and all other optional stages fall back to the logparse
-LLM when not explicitly assigned.
+the deepinspect LLM; LESSONS, MEMORIZE, and all other optional stages fall back to
+the logparse LLM when not explicitly assigned.
 
 ### Architecture document
 
@@ -317,7 +337,8 @@ internal/pipeline           stage state machine and all stage implementations
   hypothesize.go            HYPOTHESIZE stage (with feedback retry loop)
   planinspect.go            PLANINSPECTION-all stage (one breadth-first survey per hypothesis)
   deepinspect.go            DEEPINSPECT-all stage (one deep investigation per hypothesis)
-  summarize.go                SUMMARIZE stage (with feedback retry loop)
+  summarize.go              SUMMARIZE stage (with feedback retry loop)
+  lessons.go                LESSONS stage (tool-less meta-analysis, no feedback gate)
   feedback.go               feedbackChecker + per-stage quality criteria
   pipeline.go               Pipeline, Context, FinalResult, Hypothesis, PlanInspectOutcome, DeepInspectOutcome
 internal/planner            the PLANINSPECTION agent: build, prompt, one-shot tool loop
@@ -325,7 +346,7 @@ internal/diagnose           the DEEPINSPECT agent: build, prompt, one-shot tool 
 internal/distill            post-test MEMORIZE step: extract codebase facts → .testdiag/memory.md
 internal/mapping            test -> source file mapper
 internal/workspace          path jail for the file tools
-internal/tools              the workspace tools (native-schema internal tools)
+internal/tools              the workspace tools (native-schema internal tools) + tool-call log (toollog.go)
 internal/report             Markdown report writer (SUMMARIZE body + per-hypothesis appendix)
 internal/llmproxy           in-process proxy fronting an LLM endpoint
 internal/toolproto          normalize open-model tool-call syntaxes

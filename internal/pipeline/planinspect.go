@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gilbertr/testdiag/internal/planner"
+	"github.com/gilbertr/testdiag/internal/tools"
 	"github.com/gilbertr/testdiag/internal/workspace"
 )
 
@@ -42,7 +43,10 @@ func (s *planInspectAllStage) Run(ctx context.Context, sc *Context) error {
 			})
 			continue
 		}
-		sc.Plans = append(sc.Plans, s.runOne(ctx, sc, h, archDoc))
+		tools.ResetToolLog()
+		out := s.runOne(ctx, sc, h, archDoc)
+		s.writeToolLog(sc, h, tools.CollectToolLog())
+		sc.Plans = append(sc.Plans, out)
 	}
 	return nil
 }
@@ -148,6 +152,16 @@ func (s *planInspectAllStage) save(sc *Context, h Hypothesis, out PlanInspectOut
 		s.pauseFn()
 	}
 	return out
+}
+
+func (s *planInspectAllStage) writeToolLog(sc *Context, h Hypothesis, calls []tools.ToolCall) {
+	dir := filepath.Join(s.ws.Root(), handoffDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	base := fmt.Sprintf("%s.h%d.planinspect.tools.md", sanitize(sc.Test.FullName()), h.Index)
+	header := fmt.Sprintf("# Tool Log (PLANINSPECTION) h%d: %s\n\n", h.Index, sc.Test.FullName())
+	_ = os.WriteFile(filepath.Join(dir, base), []byte(header+tools.FormatToolLog(calls)), 0o644)
 }
 
 func (s *planInspectAllStage) readArchDoc() string {

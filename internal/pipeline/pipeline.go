@@ -21,6 +21,9 @@
 //	                 is available) and identifies the most likely root cause
 //	                 (.testdiag/handoff/<test>.summarize.md)
 //	FEEDBACK        — checks the summary (up to SummarizeMaxFeedbacks)
+//	LESSONS         — tool-less meta-analysis: reads all handoffs + tool logs and
+//	                 suggests improvements to the testdiag program itself
+//	                 (.testdiag/handoff/<test>.lessons.md)
 //
 // After the pipeline the caller runs a MEMORIZE step (internal/distill) that
 // extracts durable codebase facts from all handoff files and appends them to
@@ -51,6 +54,7 @@ const (
 	StatePlanInspect State = "PLANINSPECTION"
 	StateDeepInspect State = "DEEPINSPECT"
 	StateSummarize   State = "SUMMARIZE"
+	StateLessons     State = "LESSONS"
 	StateDone        State = "DONE"
 )
 
@@ -101,6 +105,7 @@ type FinalResult struct {
 	Plans        []PlanInspectOutcome // one per hypothesis (PLANINSPECTION stage)
 	DeepInspects []DeepInspectOutcome // one per hypothesis
 	Summary      string               // SUMMARIZE output
+	LessonsPath  string               // LESSONS handoff file (workspace-relative)
 	Duration     time.Duration
 }
 
@@ -117,6 +122,7 @@ type Context struct {
 	DeepInspects   []DeepInspectOutcome // DEEPINSPECT+FEEDBACK results
 	SummaryPath    string               // SUMMARIZE handoff file
 	Summary        string               // SUMMARIZE content
+	LessonsPath    string               // LESSONS handoff file
 }
 
 // Stage is one step of the state machine.
@@ -145,6 +151,7 @@ type PipelineSpec struct {
 	Plan        StageSpec
 	DeepInspect StageSpec
 	Summarize   StageSpec
+	Lessons     StageSpec
 }
 
 // Pipeline runs the ordered stages for each test against a fixed workspace.
@@ -206,6 +213,7 @@ func New(cfg *config.Config, ws *workspace.Workspace, spec PipelineSpec, backgro
 	if sc.SummarizeMaxFeedbacks > 0 {
 		names = append(names, StateFeedback)
 	}
+	names = append(names, StateLessons)
 
 	return &Pipeline{
 		stages: []Stage{
@@ -215,6 +223,7 @@ func New(cfg *config.Config, ws *workspace.Workspace, spec PipelineSpec, backgro
 			newPlanInspectAllStage(plnr, ws, archDoc, planFB, sc.PlanMaxFeedbacks, spec.Plan.ResetCounter, verbose, pauseFn),
 			newDeepInspectAllStage(diagnoser, ws, diFB, sc.DeepInspectMaxFeedbacks, spec.DeepInspect.ResetCounter, verbose, pauseFn),
 			newSummarizeStage(ws, spec.Summarize.LLM, cFB, sc.SummarizeMaxFeedbacks, verbose, pauseFn),
+			newLessonsStage(ws, spec.Lessons.LLM, archDoc, verbose, pauseFn),
 		},
 		stateNames: names,
 		verbose:    verbose,
@@ -250,6 +259,7 @@ func (p *Pipeline) Run(ctx context.Context, test jenkins.FailedTest) (FinalResul
 		Plans:        sc.Plans,
 		DeepInspects: sc.DeepInspects,
 		Summary:      sc.Summary,
+		LessonsPath:  sc.LessonsPath,
 		Duration:     time.Since(start),
 	}, nil
 }

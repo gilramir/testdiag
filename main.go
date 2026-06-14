@@ -8,7 +8,8 @@
 // test, and runs each through a pipeline:
 //
 //	DOWNLOAD → LOGPARSE → FEEDBACK → HYPOTHESIZE → FEEDBACK →
-//	[DEEPINSPECT → FEEDBACK] × N → SUMMARIZE → FEEDBACK
+//	[PLANINSPECTION → FEEDBACK → DEEPINSPECT → FEEDBACK] × N →
+//	SUMMARIZE → FEEDBACK → LESSONS
 //
 // writing one Markdown report per failure.
 package main
@@ -147,6 +148,7 @@ func run() error {
 	hypothesizeLLM := fallbackLLM(cfg, config.StageHypothsize, logparseLLM)
 	planLLM := fallbackLLM(cfg, config.StagePlanInspect, deepinspectLLM)
 	summarizeLLM := fallbackLLM(cfg, config.StageSummarize, logparseLLM)
+	lessonsLLM := fallbackLLM(cfg, config.StageLessons, logparseLLM)
 	memorizeLLM := fallbackLLM(cfg, config.StageMemoize, logparseLLM)
 
 	// Feedback LLMs — each falls back to its primary stage's LLM.
@@ -181,6 +183,7 @@ func run() error {
 			"deepinspect_feedback":    &deepinspectFBLLM,
 			"summarize":               &summarizeLLM,
 			"summarize_feedback":      &summarizeFBLLM,
+			"lessons":                 &lessonsLLM,
 			"memorize":                &memorizeLLM,
 		} {
 			if *llmPtr, err = pm.front(stageName, *llmPtr, nil); err != nil {
@@ -243,6 +246,9 @@ func run() error {
 			LLM:         summarizeLLM,
 			FeedbackLLM: summarizeFBLLM,
 		},
+		Lessons: pipeline.StageSpec{
+			LLM: lessonsLLM,
+		},
 	}
 	var pauseFn func()
 	if opts.Pause {
@@ -272,6 +278,8 @@ func run() error {
 		sc.DeepInspectMaxToolIterations, sc.DeepInspectMaxFeedbacks)
 	fmt.Printf("  SUMMARIZE   -> %s (model %s, feedbacks=%d)\n",
 		summarizeLLM.BaseURL, summarizeLLM.Model, sc.SummarizeMaxFeedbacks)
+	fmt.Printf("  LESSONS     -> %s (model %s)\n",
+		lessonsLLM.BaseURL, lessonsLLM.Model)
 	fmt.Printf("  MEMORIZE    -> %s (model %s)\n",
 		memorizeLLM.BaseURL, memorizeLLM.Model)
 	if memory != "" {

@@ -10,7 +10,8 @@ Jenkins build URL it fetches the test report, and for each failed test it runs a
 
 ```
 DOWNLOAD → LOGPARSE → FEEDBACK → HYPOTHESIZE → FEEDBACK →
-[DEEPINSPECT → FEEDBACK] × N → SUMMARIZE → FEEDBACK
+[PLANINSPECTION → FEEDBACK → DEEPINSPECT → FEEDBACK] × N →
+SUMMARIZE → FEEDBACK → LESSONS
 ```
 
 - **DOWNLOAD** — save the raw failure log to disk
@@ -18,10 +19,13 @@ DOWNLOAD → LOGPARSE → FEEDBACK → HYPOTHESIZE → FEEDBACK →
 - **FEEDBACK** — tool-less LLM gate: accepts the brief or rejects it with a critique; LOGPARSE retries with the critique up to `logparse_max_feedbacks` times
 - **HYPOTHESIZE** — tool-less LLM pass that reads the brief plus an optional architecture document and produces a ranked list of 1–N hypotheses; 0 hypotheses abandons the test
 - **FEEDBACK** — gate on the hypothesis list (`hypothesize_max_feedbacks`)
+- **PLANINSPECTION × N** — one fresh tool-using agent per hypothesis; breadth-first workspace survey that produces a prioritized, annotated file list for DEEPINSPECT to follow; soft-fails per hypothesis
+- **FEEDBACK per PLANINSPECTION** — gate on each plan (`planinspection_max_feedbacks`)
 - **DEEPINSPECT × N** — one fresh agent per hypothesis, jailed to the workspace source tools; investigates whether that hypothesis is CONFIRMED / REFUTED / INCONCLUSIVE
 - **FEEDBACK per DEEPINSPECT** — gate on each DEEPINSPECT result (`deepinspect_max_feedbacks`); a failed hypothesis is soft-failed (noted but does not stop the pipeline)
 - **SUMMARIZE** — tool-less LLM pass; for each hypothesis writes a paragraph explaining what DEEPINSPECT found (or explicitly noting no result if the inspection failed or was not run), then adds a "Most Likely Root Cause" verdict
 - **FEEDBACK** — gate on the summary (`summarize_max_feedbacks`)
+- **LESSONS** — tool-less LLM pass; reads all handoff files + tool logs produced during the run (including `.testdiag/handoff/<test>.h<N>.(plan|deep)inspect.tools.md`) plus the optional architecture document; produces developer-facing meta-analysis: prompt quality, tool usage patterns, stage design suggestions, and what worked well; no feedback gate; output at `.testdiag/handoff/<test>.lessons.md`
 
 Each stage hands off to the next through a Markdown file on disk (`.testdiag/handoff/`) and each LLM can be configured independently. Different LLMs can be assigned to different stages so a cheap model can parse the log while a stronger one does the source tracing.
 
@@ -50,8 +54,8 @@ The pipeline is sequential: fetch failures → run each failure through the stag
   starting the per-stage LLM proxies (a `proxyManager` runs at most one proxy per
   distinct `(endpoint, advertised tool set)` and repoints each LLM's `BaseURL`), and
   `process()`, which runs each failure through the `pipeline` one at a time in order.
-  LLMs for optional stages (HYPOTHESIZE, SUMMARIZE, and all feedback stages) fall back
-  to the logparse LLM when not explicitly configured. Each failed test is fully
+  LLMs for optional stages (HYPOTHESIZE, SUMMARIZE, LESSONS, and all feedback stages)
+  fall back to the logparse LLM when not explicitly configured. Each failed test is fully
   independent (no shared agent state); sequential execution keeps output and
   `run_script` approval prompts coherent for the operator.
 
@@ -65,12 +69,14 @@ The pipeline is sequential: fetch failures → run each failure through the stag
   returned by `UserConfigPath()` (renamed from `Path()` in the two-file redesign).
   LLMs are defined once under `[llms.<name>]` and each stage points at one by name
   under `[stages]`; `LLMForStage` resolves the pair and errors clearly if a required
-  stage is unassigned. Optional stage assignments (hypothesize, summarize, all feedback
-  stages) are resolved via `LLMForStageOptional` and fall back to a sensible default
-  at the call site. Per-stage tuning knobs live under `[stage_config]` as a flat
-  struct (`StageConfig`): `logparse_max_feedbacks`, `hypothesize_max_feedbacks`,
+  stage is unassigned. Optional stage assignments (hypothesize, summarize, lessons,
+  all feedback stages) are resolved via `LLMForStageOptional` and fall back to a
+  sensible default at the call site. Per-stage tuning knobs live under `[stage_config]`
+  as a flat struct (`StageConfig`): `logparse_max_feedbacks`, `hypothesize_max_feedbacks`,
+  `planinspection_max_feedbacks`, `planinspection_max_tool_iterations`,
   `deepinspect_max_feedbacks`, `deepinspect_max_tool_iterations`,
-  `summarize_max_feedbacks` — each has a `TESTDIAG_<STAGE>_*` env var.
+  `summarize_max_feedbacks` — each has a `TESTDIAG_<STAGE>_*` env var. LESSONS has
+  no config knob (no feedback gate, no tool iteration limit).
   `Workspace.ArchitectureDoc` (config key `workspace.architecture_doc`, env
   `TESTDIAG_ARCHITECTURE_DOC`) is the workspace-relative path to an architecture
   document HYPOTHESIZE reads.
@@ -89,7 +95,9 @@ The pipeline is sequential: fetch failures → run each failure through the stag
   - `deepinspect.go` — `deepInspectAllStage` iterates over `sc.Hypotheses`, calls
     `diagnose.Diagnoser.Diagnose` per hypothesis, runs FEEDBACK on each result, and
     soft-fails any hypothesis whose agent errored or whose feedback was exhausted;
-    results accumulate in `sc.DeepInspects`
+    results accumulate in `sc.DeepInspects`; calls `tools.ResetToolLog()` before each
+    hypothesis and `tools.CollectToolLog()` after, writing the compact tool-call log to
+    `.testdiag/handoff/<test>.h<N>.deepinspect.tools.md`
   - `summarize.go` — tool-less agent that produces two things: (1) for each
     hypothesis, a short paragraph — if a DEEPINSPECT result exists it explains
     what was found (confirmed/refuted/inconclusive) and the key evidence; if the
@@ -99,16 +107,27 @@ The pipeline is sequential: fetch failures → run each failure through the stag
     written to `.testdiag/handoff/<test>.summarize.md`; retries with FEEDBACK
     critique up to `maxFeedbacks` times. The FEEDBACK gate checks that every
     hypothesis has a section and that the most-likely verdict is present.
+  - `lessons.go` — `lessonsStage` is the final stage; no tools, no feedback gate.
+    `gatherHandoffs` globs `.testdiag/handoff/<test>.*.md` (picking up all prose
+    handoffs and both `.(plan|deep)inspect.tools.md` tool logs automatically).
+    `buildLessonsPrompt` injects the arch doc + sorted handoff files into the user
+    message. The system prompt asks the LLM to evaluate prompt quality, tool usage
+    efficiency, stage design, and what worked well, and to produce actionable
+    developer suggestions. Output: `.testdiag/handoff/<test>.lessons.md` (set in
+    `sc.LessonsPath`).
   - `feedback.go` — `feedbackChecker` is a shared struct with a configurable
     `systemPrompt` field; each stage gate uses a different prompt constant
-    (`logParseFeedbackPrompt`, `hypothesizeFeedbackPrompt`, `deepInspectFeedbackPrompt`,
-    `summarizeFeedbackPrompt`). `feedbackChecker.Check` returns APPROVED or a critique
-    string the caller uses to build a retry prompt.
+    (`logParseFeedbackPrompt`, `hypothesizeFeedbackPrompt`, `planInspectFeedbackPrompt`,
+    `deepInspectFeedbackPrompt`, `summarizeFeedbackPrompt`). `feedbackChecker.Check`
+    returns APPROVED or a critique string the caller uses to build a retry prompt.
 
   Key types in `pipeline.go`: `Hypothesis{Index, Title, Description}`,
-  `DeepInspectOutcome{Hypothesis, Content, ToolsCalled, FeedbackApproved, Failed,
-  FailReason}`, `FinalResult` (returned by `Run`, consumed by `report`),
-  `StageSpec{LLM, FeedbackLLM}`, `PipelineSpec` (passed to `New`).
+  `PlanInspectOutcome{Hypothesis, Content, ToolsCalled, FeedbackApproved, Failed,
+  FailReason}`, `DeepInspectOutcome{Hypothesis, Content, ToolsCalled, FeedbackApproved,
+  Failed, FailReason}`, `FinalResult{…, Summary, LessonsPath, …}` (returned by `Run`,
+  consumed by `report`), `StageSpec{LLM, FeedbackLLM, ResetCounter}`,
+  `PipelineSpec{LogParse, Hypothesize, Plan, DeepInspect, Summarize, Lessons}`
+  (passed to `New`).
 
 - **`internal/jenkins`** — normalizes any build/testReport URL to
   `…/api/json?depth=1`, HTTP Basic auth (user + API **token**, not password),
@@ -123,11 +142,9 @@ The pipeline is sequential: fetch failures → run each failure through the stag
 - **`internal/tools`** — the read-only tools exposed to the model, all jailed to
   the workspace: single-file (`read_file`, `list_directory`, `count_lines`,
   `read_lines`, `grep`), tree-wide (`search_repo` recursive grep, `find_files`
-  glob/substring locate), version control (`git_blame`, `git_log` — scoped to a
-  jailed path via a `--` pathspec, pager disabled, output byte-capped), and
-  log-oriented (`read_log` with `tail`, `grep_log` with context lines). They
-  implement `v1beta.Tool` with a `JSONSchema()` so the provider calls them
-  natively. `Register(ws)` registers them **once at startup** via the global
+  glob/substring locate), and log-oriented (`read_log` with `tail`, `grep_log` with
+  context lines). They implement `v1beta.Tool` with a `JSONSchema()` so the provider
+  calls them natively. `Register(ws)` registers them **once at startup** via the global
   `vnext.RegisterInternalTool` before any agent is built, so each tool is a
   single shared, **stateless** instance reused across every test — never store
   per-test state on a tool. All have hard output caps (file size, line span,
@@ -150,6 +167,14 @@ The pipeline is sequential: fetch failures → run each failure through the stag
   `tools.ResetLoopGuard()` before each agent run to scope detection to a single
   attempt. Tools that opt out via the `loopExempt` marker (the `notebook`, whose
   re-reads legitimately change as notes accumulate) are never guarded.
+  `toollog.go` implements a **tool-call log** (global process state with
+  `ResetToolLog()` / `CollectToolLog()` / `appendToolCall()`): the `loggingTool`
+  wrapper calls `appendToolCall` after each real tool execution (not loop-nudges),
+  recording name, args, and a compact `summarizeValue` of the response (short strings
+  quoted; long strings as `(N chars, M lines)`; slices as `N items`; maps recursed).
+  `FormatToolLog` serializes to numbered Markdown sections. The pipeline stages
+  (`planinspect.go`, `deepinspect.go`) call `ResetToolLog()` before each hypothesis
+  run and `CollectToolLog()` after, writing the result to the handoff directory.
 
 - **`internal/diagnose`** — the DEEPINSPECT engine. `Diagnoser.New(ws, llm,
   background, maxToolIterations)` creates a diagnoser. `Diagnose(ctx, DiagnoseInput)`

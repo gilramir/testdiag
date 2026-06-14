@@ -36,6 +36,7 @@ const (
 	StageDeepInspectFeedback = "deepinspect_feedback" // optional; falls back to deepinspect LLM
 	StageSummarize           = "summarize"             // optional; falls back to logparse LLM
 	StageSummarizeFeedback   = "summarize_feedback"   // optional; falls back to summarize LLM
+	StageLessons             = "lessons"              // optional; falls back to logparse LLM
 	StageMemoize             = "memorize"             // optional; falls back to logparse LLM
 )
 
