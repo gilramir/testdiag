@@ -1,6 +1,9 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/BurntSushi/toml"
@@ -123,6 +126,36 @@ func TestEnvName(t *testing.T) {
 			t.Errorf("envName(%q) = %q, want %q", in, got, want)
 		}
 	}
+}
+
+func TestLoadRequired(t *testing.T) {
+	t.Run("missing file returns error", func(t *testing.T) {
+		err := loadRequired(filepath.Join(t.TempDir(), "testdiag.toml"), defaults())
+		if err == nil {
+			t.Fatal("expected error for missing file, got nil")
+		}
+		if !strings.Contains(err.Error(), "workspace config not found") {
+			t.Errorf("unexpected error message: %v", err)
+		}
+	})
+
+	t.Run("present file is parsed", func(t *testing.T) {
+		dir := t.TempDir()
+		content := `[llms.x]
+base_url = "http://x/v1"
+model = "m"
+`
+		if err := os.WriteFile(filepath.Join(dir, "testdiag.toml"), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+		cfg := defaults()
+		if err := loadRequired(filepath.Join(dir, "testdiag.toml"), cfg); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if _, ok := cfg.LLMs["x"]; !ok {
+			t.Error("expected llm 'x' to be parsed")
+		}
+	})
 }
 
 func TestApplyEnvOverridesNamedLLM(t *testing.T) {

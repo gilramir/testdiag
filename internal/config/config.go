@@ -200,7 +200,8 @@ func Load() (*Config, error) {
 
 	wsRoot := bootstrapWorkspaceRoot()
 
-	if err := loadIfExists(filepath.Join(wsRoot, "testdiag.toml"), cfg); err != nil {
+	wsConfig := filepath.Join(wsRoot, "testdiag.toml")
+	if err := loadRequired(wsConfig, cfg); err != nil {
 		return nil, err
 	}
 
@@ -260,6 +261,20 @@ func findGitRoot() (string, bool) {
 		}
 		dir = parent
 	}
+}
+
+// loadRequired decodes path into cfg. A missing file is an error.
+func loadRequired(path string, cfg *Config) error {
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("workspace config not found: %s", path)
+		}
+		return fmt.Errorf("reading %s: %w", path, err)
+	}
+	if _, err := toml.DecodeFile(path, cfg); err != nil {
+		return fmt.Errorf("parsing %s: %w", path, err)
+	}
+	return nil
 }
 
 // loadIfExists decodes path into cfg when the file exists. A missing file is
