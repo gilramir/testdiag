@@ -52,6 +52,7 @@ func (s *logParseStage) Run(ctx context.Context, sc *Context) error {
 		critique  string
 	)
 	for feedbacks := 0; ; {
+		stageBanner(s.verbose, string(s.Name()), feedbacks+1)
 		agent, err := s.buildAgent(sc.Test)
 		if err != nil {
 			return fmt.Errorf("building agent: %w", err)

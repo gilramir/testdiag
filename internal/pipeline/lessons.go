@@ -38,6 +38,7 @@ func newLessonsStage(ws *workspace.Workspace, llm config.LLMSpec, archDocPath st
 func (s *lessonsStage) Name() State { return StateLessons }
 
 func (s *lessonsStage) Run(ctx context.Context, sc *Context) error {
+	stageBanner(s.verbose, string(s.Name()), 1)
 	handoffs, err := s.gatherHandoffs(sc.Test)
 	if err != nil {
 		return fmt.Errorf("gathering handoffs: %w", err)

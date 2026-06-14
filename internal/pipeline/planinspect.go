@@ -77,6 +77,7 @@ func (s *planInspectAllStage) runOne(ctx context.Context, sc *Context, h Hypothe
 		critique   string
 	)
 	for feedbacks := 0; ; {
+		stageBanner(s.verbose, fmt.Sprintf("%s h%d", string(s.Name()), h.Index), feedbacks+1)
 		res, err := s.p.Plan(ctx, planner.PlanInput{
 			Test:            sc.Test,
 			Brief:           sc.Brief,

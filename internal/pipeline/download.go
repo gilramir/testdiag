@@ -19,11 +19,15 @@ const logDir = ".testdiag/logs"
 // downloadStage materializes the failing test's combined output to disk. The
 // Jenkins API call that enumerates failures happens once up front in main; this
 // stage just writes the per-test log that LOGPARSE will read.
-type downloadStage struct{ ws *workspace.Workspace }
+type downloadStage struct {
+	ws      *workspace.Workspace
+	verbose bool
+}
 
 func (s *downloadStage) Name() State { return StateDownload }
 
 func (s *downloadStage) Run(ctx context.Context, sc *Context) error {
+	stageBanner(s.verbose, string(s.Name()), 1)
 	rel, err := saveLog(s.ws.Root(), sc.Test)
 	if err != nil {
 		return err

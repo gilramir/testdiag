@@ -217,7 +217,7 @@ func New(cfg *config.Config, ws *workspace.Workspace, spec PipelineSpec, backgro
 
 	return &Pipeline{
 		stages: []Stage{
-			&downloadStage{ws: ws},
+			&downloadStage{ws: ws, verbose: verbose},
 			newLogParseStage(ws, spec.LogParse.LLM, lpFB, sc.LogParseMaxFeedbacks, verbose, pauseFn),
 			newHypothesizeStage(ws, spec.Hypothesize.LLM, archDoc, hFB, sc.HypothesizeMaxFeedbacks, verbose, pauseFn),
 			newPlanInspectAllStage(plnr, ws, archDoc, planFB, sc.PlanMaxFeedbacks, spec.Plan.ResetCounter, verbose, pauseFn),
@@ -227,6 +227,20 @@ func New(cfg *config.Config, ws *workspace.Workspace, spec PipelineSpec, backgro
 		},
 		stateNames: names,
 		verbose:    verbose,
+	}
+}
+
+// stageBanner prints the white-on-red stage entry banner to stdout when
+// verbose is true. label is the stage name (with optional hypothesis suffix
+// for per-hypothesis stages); iter is the 1-based attempt number.
+func stageBanner(verbose bool, label string, iter int) {
+	if !verbose {
+		return
+	}
+	if iter > 1 {
+		fmt.Fprintf(os.Stdout, "\033[1;97;41m ENTERING %s (attempt %d) \033[0m\n", label, iter)
+	} else {
+		fmt.Fprintf(os.Stdout, "\033[1;97;41m ENTERING %s \033[0m\n", label)
 	}
 }
 
@@ -243,9 +257,6 @@ func (p *Pipeline) Run(ctx context.Context, test jenkins.FailedTest) (FinalResul
 	for _, st := range p.stages {
 		if err := ctx.Err(); err != nil {
 			return FinalResult{}, err
-		}
-		if p.verbose {
-			fmt.Fprintf(os.Stdout, "\033[1;97;41m ENTERING %s \033[0m\n", st.Name())
 		}
 		if err := st.Run(ctx, sc); err != nil {
 			return FinalResult{}, fmt.Errorf("%s stage: %w", st.Name(), err)
