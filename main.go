@@ -59,13 +59,6 @@ type options struct {
 }
 
 func main() {
-	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "testdiag: %v\n", err)
-		os.Exit(1)
-	}
-}
-
-func run() error {
 	opts := &options{}
 	ap := argparse.New(&argparse.Command{
 		Description: "Diagnose Jenkins test failures with an LLM.",
@@ -73,6 +66,9 @@ func run() error {
 		Epilog: "Configuration is read from ~/.config/testdiag/config.toml and may be " +
 			"overridden with TESTDIAG_* environment variables. The URL may be a build " +
 			"or test-report URL; /api/json is appended automatically.",
+		Function: func(_ *argparse.Command, values argparse.Values) error {
+			return run(values.(*options))
+		},
 	})
 	ap.Add(&argparse.Argument{
 		Switches: []string{"-o", "--output"},
@@ -104,7 +100,10 @@ func run() error {
 		Help: "Only diagnose tests whose name contains any of these substrings " +
 			"(default: all failed tests)",
 	})
-	ap.Parse()
+	ap.ParseAndExit()
+}
+
+func run(opts *options) error {
 	buildURL := opts.URL
 
 	cfg, err := config.Load()
