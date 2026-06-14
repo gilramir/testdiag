@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	vnext "github.com/agenticgokit/agenticgokit/v1beta"
 
@@ -20,7 +21,8 @@ import (
 // Caps for the tree-walking tools. They protect both the context window and the
 // wall-clock cost of crawling a large checkout.
 const (
-	maxRepoMatches  = 200   // max matches returned by search_repo
+	maxRepoMatches  = 200   // max matches returned per page by search_repo (no offset/limit)
+	maxRepoCacheSize = 2000 // max matches stored in the full search cache
 	maxFindResults  = 500   // max paths returned by find_files
 	maxFilesScanned = 20000 // max files visited by a single walk
 )
@@ -51,6 +53,41 @@ func ExcludeDir(name string) {
 }
 
 // ---------------------------------------------------------------------------
+// search_repo result cache
+// ---------------------------------------------------------------------------
+
+// searchCacheEntry holds the full match list for one (regex, path, include, ignoreCase)
+// combination so that paginated calls don't redo the walk.
+type searchCacheEntry struct {
+	matches   []map[string]interface{}
+	truncated bool // true if the walk hit maxRepoCacheSize before scanning all files
+}
+
+var (
+	searchCacheMu    sync.Mutex
+	searchCacheStore = map[string]*searchCacheEntry{}
+)
+
+// searchCacheKey builds the map key from the parameters that define a unique
+// search. offset and limit are intentionally excluded — same search, different page.
+func searchCacheKey(pattern, base, include string, ignoreCase bool) string {
+	ic := "0"
+	if ignoreCase {
+		ic = "1"
+	}
+	return pattern + "\x00" + base + "\x00" + include + "\x00" + ic
+}
+
+// ResetSearchCache discards all cached search_repo results. Call at the start
+// of each agent run (alongside ResetLoopGuard) so results from one hypothesis
+// don't bleed into the next.
+func ResetSearchCache() {
+	searchCacheMu.Lock()
+	searchCacheStore = map[string]*searchCacheEntry{}
+	searchCacheMu.Unlock()
+}
+
+// ---------------------------------------------------------------------------
 // search_repo (recursive grep across the workspace tree)
 // ---------------------------------------------------------------------------
 
@@ -58,7 +95,7 @@ type searchRepoTool struct{ ws *workspace.Workspace }
 
 func (t *searchRepoTool) Name() string { return "search_repo" }
 func (t *searchRepoTool) Description() string {
-	return "Recursively search the workspace tree for a regular-expression pattern and return matching lines as path:line: text. Use this to locate a symbol, an error string from the log, or a test's source file across the whole project. This crawls the WHOLE tree and can be slow, so prefer narrower lookups first: if you already know a symbol is imported, follow its import to the defining file and grep that file instead; and when you must search, pass an include glob (e.g. *.py) and search for the definition (e.g. 'def name'/'class name') rather than every use. Skips VCS, dependency, and build directories and binary files."
+	return "Recursively search the workspace tree for a regular-expression pattern and return matching lines. Results are cached after the first call: repeating the same search (same regex, path, include_glob, ignore_case) with a different offset/limit is instant and does NOT re-scan the tree. Use offset+limit to page through a large result set rather than repeating the search. This crawls the WHOLE tree and can be slow, so prefer narrower lookups first: if you already know a symbol is imported, follow its import to the defining file and grep that file instead; and when you must search, pass an include_glob (e.g. *.py) and search for the definition (e.g. 'def name'/'class name') rather than every use. Skips VCS, dependency, and build directories and binary files."
 }
 func (t *searchRepoTool) JSONSchema() map[string]interface{} {
 	return map[string]interface{}{
@@ -68,6 +105,8 @@ func (t *searchRepoTool) JSONSchema() map[string]interface{} {
 			"path":         map[string]interface{}{"type": "string", "description": "Workspace-relative directory to limit the search to. Defaults to the whole workspace ('.')."},
 			"include_glob": map[string]interface{}{"type": "string", "description": "Optional filename glob to restrict which files are searched (e.g. *.py or *Test.java)."},
 			"ignore_case":  map[string]interface{}{"type": "boolean", "description": "Case-insensitive match (default false)."},
+			"offset":       map[string]interface{}{"type": "integer", "description": "0-based index of the first match to return. Use with limit to page through large result sets. The result set is cached after the first call, so paging is free."},
+			"limit":        map[string]interface{}{"type": "integer", "description": "Maximum number of matches to return. Defaults to all matches from offset onward (up to the per-call cap when no offset is given)."},
 		},
 		"required": []string{"regex"},
 	}
@@ -86,8 +125,10 @@ func (t *searchRepoTool) Execute(ctx context.Context, args map[string]interface{
 			return fail("search_repo: %q looks like an attempt to find a log file. There is no failure log in the workspace — it was consumed by the earlier stage and everything relevant is already in the investigation brief. Do NOT search for logs; go straight to the SOURCE files the brief names.", q)
 		}
 	}
+
+	ignoreCase := boolArg(args, "ignore_case")
 	expr := pattern
-	if boolArg(args, "ignore_case") {
+	if ignoreCase {
 		expr = "(?i)" + expr
 	}
 	re, err := regexp.Compile(expr)
@@ -98,19 +139,77 @@ func (t *searchRepoTool) Execute(ctx context.Context, args map[string]interface{
 	if p, ok := strArg(args, "path"); ok {
 		base = p
 	}
+	include, _ := strArg(args, "include_glob")
+
 	root, err := t.ws.Resolve(base)
 	if err != nil {
 		return fail("search_repo: %v", err)
 	}
-	include, hasInclude := strArg(args, "include_glob")
 
+	// Check the cache; populate on miss.
+	cacheKey := searchCacheKey(pattern, base, include, ignoreCase)
+	entry := t.cacheGet(cacheKey)
+	if entry == nil {
+		entry = t.populateCache(ctx, cacheKey, root, include, re)
+		if entry == nil {
+			return fail("search_repo: %v", ctx.Err())
+		}
+	}
+
+	// Apply offset/limit to the cached full result set.
+	all := entry.matches
+	total := len(all)
+
+	offset := 0
+	if v, ok := intArg(args, "offset"); ok && v > 0 {
+		offset = v
+	}
+	if offset > total {
+		offset = total
+	}
+
+	end := total
+	if v, ok := intArg(args, "limit"); ok && v > 0 {
+		if end = offset + v; end > total {
+			end = total
+		}
+	} else if offset == 0 {
+		// No pagination requested: honour the legacy per-call cap so the first
+		// call without offset/limit returns a manageable slice.
+		if end > maxRepoMatches {
+			end = maxRepoMatches
+		}
+	}
+
+	page := all[offset:end]
+	return ok(map[string]interface{}{
+		"matches":   page,
+		"count":     len(page),
+		"total":     total,
+		"offset":    offset,
+		"has_more":  end < total,
+		"truncated": entry.truncated,
+	}), nil
+}
+
+// cacheGet returns the cached entry for key, or nil if not present.
+func (t *searchRepoTool) cacheGet(key string) *searchCacheEntry {
+	searchCacheMu.Lock()
+	defer searchCacheMu.Unlock()
+	return searchCacheStore[key]
+}
+
+// populateCache performs the full walk, stores the result under key, and
+// returns the new entry. Returns nil if the context was cancelled mid-walk.
+func (t *searchRepoTool) populateCache(ctx context.Context, key, root, include string, re *regexp.Regexp) *searchCacheEntry {
+	hasInclude := include != ""
 	var matches []map[string]interface{}
 	filesScanned := 0
 	truncated := false
 
 	walkErr := filepath.WalkDir(root, func(abs string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil // skip unreadable entries rather than aborting the walk
+			return nil
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -135,21 +234,21 @@ func (t *searchRepoTool) Execute(ctx context.Context, args map[string]interface{
 		}
 		filesScanned++
 
-		if searchFile(abs, t.ws.Rel(abs), re, &matches) {
+		if searchFile(abs, t.ws.Rel(abs), re, &matches, maxRepoCacheSize) {
 			truncated = true
 			return filepath.SkipAll
 		}
 		return nil
 	})
 	if walkErr != nil && ctx.Err() != nil {
-		return fail("search_repo: %v", ctx.Err())
+		return nil
 	}
 
-	return ok(map[string]interface{}{
-		"matches":   matches,
-		"count":     len(matches),
-		"truncated": truncated,
-	}), nil
+	entry := &searchCacheEntry{matches: matches, truncated: truncated}
+	searchCacheMu.Lock()
+	searchCacheStore[key] = entry
+	searchCacheMu.Unlock()
+	return entry
 }
 
 // logFileQueryRe matches a query whose ENTIRETY names a log file — e.g.
@@ -290,14 +389,14 @@ func matchPath(pattern, rel, base string, ci bool) bool {
 const binarySniffLen = 8000
 
 // searchFile scans one file line by line for re, appending matches (capped at
-// maxRepoMatches across the whole walk) to *matches. It STREAMS the file with a
-// small buffer — reading at most maxFileBytes — rather than loading the whole
-// file into memory, and skips files that look binary from their first bytes.
-// Returns true when the global match cap is reached so the walk can stop.
+// cap across the whole walk) to *matches. It STREAMS the file with a small
+// buffer — reading at most maxFileBytes — rather than loading the whole file
+// into memory, and skips files that look binary from their first bytes.
+// Returns true when the cap is reached so the walk can stop early.
 //
 // This is the hot path of search_repo: it runs once per regular file in the
 // tree, so it must not allocate per-file buffers proportional to maxFileBytes.
-func searchFile(abs, rel string, re *regexp.Regexp, matches *[]map[string]interface{}) (capped bool) {
+func searchFile(abs, rel string, re *regexp.Regexp, matches *[]map[string]interface{}, cap int) (capped bool) {
 	f, err := os.Open(abs)
 	if err != nil {
 		return false // unreadable: skip, like the rest of the walk
@@ -318,7 +417,7 @@ func searchFile(abs, rel string, re *regexp.Regexp, matches *[]map[string]interf
 		if !re.MatchString(text) {
 			continue
 		}
-		if len(*matches) >= maxRepoMatches {
+		if len(*matches) >= cap {
 			return true
 		}
 		*matches = append(*matches, map[string]interface{}{

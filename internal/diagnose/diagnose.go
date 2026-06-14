@@ -107,6 +107,7 @@ func (d *Diagnoser) Diagnose(ctx context.Context, input DiagnoseInput) (Result, 
 	}
 
 	tools.ResetLoopGuard()
+	tools.ResetSearchCache()
 	r, err := agent.Run(ctx, buildUserPrompt(input, m, d.background, d.memory))
 	if err != nil {
 		return Result{}, fmt.Errorf("agent run for %s: %w", input.Test.FullName(), err)

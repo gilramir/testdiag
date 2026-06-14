@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,8 +38,10 @@ func setupWS(t *testing.T) (*workspace.Workspace, string) {
 
 func TestSearchRepo(t *testing.T) {
 	ws, _ := setupWS(t)
+	ResetSearchCache()
+	t.Cleanup(ResetSearchCache)
 	tool := &searchRepoTool{ws: ws}
-	res, err := tool.Execute(context.Background(), map[string]interface{}{"pattern": `def connect`})
+	res, err := tool.Execute(context.Background(), map[string]interface{}{"regex": `def connect`})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,45 +56,56 @@ func TestSearchRepo(t *testing.T) {
 	if matches[0]["path"] != "client/foo_client.py" {
 		t.Errorf("wrong path: %v", matches[0]["path"])
 	}
+	// total and has_more must be present and consistent.
+	if content["total"].(int) != 1 {
+		t.Errorf("total want 1, got %v", content["total"])
+	}
+	if content["has_more"].(bool) {
+		t.Error("has_more should be false for a single-match result")
+	}
 }
 
 func TestSearchRepoRefusesLogHuntWhenWithheld(t *testing.T) {
 	ws, _ := setupWS(t)
+	ResetSearchCache()
+	t.Cleanup(ResetSearchCache)
 	tool := &searchRepoTool{ws: ws}
 
 	// With logs withheld (DEEPINSPECT), a query naming a log file is refused.
 	SetLogToolsEnabled(false)
 	defer SetLogToolsEnabled(true)
 	for _, q := range []string{"failure.log", "log.txt", "*.log"} {
-		res, err := tool.Execute(context.Background(), map[string]interface{}{"pattern": q})
+		res, err := tool.Execute(context.Background(), map[string]interface{}{"regex": q})
 		if err == nil || (res != nil && res.Success) {
 			t.Errorf("expected refusal for log-hunt pattern %q", q)
 		}
 	}
 	// Also refuse it via the include glob.
 	if res, err := tool.Execute(context.Background(), map[string]interface{}{
-		"pattern": "anything", "include": "*.log",
+		"regex": "anything", "include_glob": "*.log",
 	}); err == nil || res.Success {
-		t.Error("expected refusal for include=*.log")
+		t.Error("expected refusal for include_glob=*.log")
 	}
 
 	// A legitimate source search is NOT refused even when logs are withheld,
 	// including a content pattern that merely mentions ".log".
 	for _, q := range []string{"def connect", `\.log\(`, "logger"} {
-		if res, err := tool.Execute(context.Background(), map[string]interface{}{"pattern": q}); err != nil || !res.Success {
+		if res, err := tool.Execute(context.Background(), map[string]interface{}{"regex": q}); err != nil || !res.Success {
 			t.Errorf("source search %q should succeed when logs withheld: %v", q, err)
 		}
 	}
 
 	// When logs are NOT withheld (other contexts), the guard is inactive.
 	SetLogToolsEnabled(true)
-	if res, err := tool.Execute(context.Background(), map[string]interface{}{"pattern": "failure.log"}); err != nil || !res.Success {
+	if res, err := tool.Execute(context.Background(), map[string]interface{}{"regex": "failure.log"}); err != nil || !res.Success {
 		t.Errorf("log-named search should run when logs not withheld: %v", err)
 	}
 }
 
 func TestSearchRepoExcludesReportDir(t *testing.T) {
 	ws, root := setupWS(t)
+	ResetSearchCache()
+	t.Cleanup(ResetSearchCache)
 	// A report directory inside the checkout that holds a generated report
 	// mentioning the same symbol; ExcludeDir should keep the search out of it.
 	abs := filepath.Join(root, "test-diagnosis", "report.md")
@@ -104,13 +118,118 @@ func TestSearchRepoExcludesReportDir(t *testing.T) {
 	ExcludeDir("test-diagnosis")
 
 	tool := &searchRepoTool{ws: ws}
-	res, err := tool.Execute(context.Background(), map[string]interface{}{"pattern": `def connect`})
+	res, err := tool.Execute(context.Background(), map[string]interface{}{"regex": `def connect`})
 	if err != nil {
 		t.Fatal(err)
 	}
 	matches := res.Content.(map[string]interface{})["matches"].([]map[string]interface{})
 	if len(matches) != 1 || matches[0]["path"] != "client/foo_client.py" {
 		t.Fatalf("report dir not excluded; matches: %v", matches)
+	}
+}
+
+func TestSearchRepoPagination(t *testing.T) {
+	// Build a workspace with many matching lines so we can page through them.
+	root := t.TempDir()
+	var body strings.Builder
+	for i := 1; i <= 10; i++ {
+		fmt.Fprintf(&body, "func Hit%d() {}\n", i)
+	}
+	if err := os.WriteFile(filepath.Join(root, "hits.go"), []byte(body.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ResetSearchCache()
+	t.Cleanup(ResetSearchCache)
+	tool := &searchRepoTool{ws: ws}
+
+	// First page: offset=0, limit=4
+	res, err := tool.Execute(context.Background(), map[string]interface{}{
+		"regex": `func Hit`, "offset": 0, "limit": 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := res.Content.(map[string]interface{})
+	if c["count"].(int) != 4 {
+		t.Fatalf("page 1: want count=4, got %v", c["count"])
+	}
+	if c["total"].(int) != 10 {
+		t.Fatalf("page 1: want total=10, got %v", c["total"])
+	}
+	if !c["has_more"].(bool) {
+		t.Error("page 1: has_more should be true")
+	}
+
+	// Second page: offset=4, limit=4 — must reuse cache (no second walk)
+	res2, err := tool.Execute(context.Background(), map[string]interface{}{
+		"regex": `func Hit`, "offset": 4, "limit": 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c2 := res2.Content.(map[string]interface{})
+	if c2["count"].(int) != 4 {
+		t.Fatalf("page 2: want count=4, got %v", c2["count"])
+	}
+	if c2["total"].(int) != 10 {
+		t.Fatalf("page 2: want total=10 (cached), got %v", c2["total"])
+	}
+	// Pages must not overlap.
+	p1 := res.Content.(map[string]interface{})["matches"].([]map[string]interface{})
+	p2 := res2.Content.(map[string]interface{})["matches"].([]map[string]interface{})
+	for _, m1 := range p1 {
+		for _, m2 := range p2 {
+			if m1["line"] == m2["line"] {
+				t.Errorf("pages overlap at line %v", m1["line"])
+			}
+		}
+	}
+
+	// Last page: offset=8, limit=4 — only 2 remain
+	res3, err := tool.Execute(context.Background(), map[string]interface{}{
+		"regex": `func Hit`, "offset": 8, "limit": 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c3 := res3.Content.(map[string]interface{})
+	if c3["count"].(int) != 2 {
+		t.Fatalf("last page: want count=2, got %v", c3["count"])
+	}
+	if c3["has_more"].(bool) {
+		t.Error("last page: has_more should be false")
+	}
+}
+
+func TestSearchRepoCacheIsolation(t *testing.T) {
+	ws, _ := setupWS(t)
+	ResetSearchCache()
+	t.Cleanup(ResetSearchCache)
+	tool := &searchRepoTool{ws: ws}
+
+	// Populate cache with one pattern.
+	tool.Execute(context.Background(), map[string]interface{}{"regex": `def connect`})
+
+	// A different regex must NOT hit the same cache entry.
+	res, err := tool.Execute(context.Background(), map[string]interface{}{"regex": `void Bind`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	matches := res.Content.(map[string]interface{})["matches"].([]map[string]interface{})
+	if len(matches) != 1 || matches[0]["path"] != "server/src/foo.cc" {
+		t.Fatalf("different regex got wrong result: %v", matches)
+	}
+
+	// ResetSearchCache must clear both entries so a re-search works cleanly.
+	ResetSearchCache()
+	res2, _ := tool.Execute(context.Background(), map[string]interface{}{"regex": `def connect`})
+	m2 := res2.Content.(map[string]interface{})["matches"].([]map[string]interface{})
+	if len(m2) != 1 {
+		t.Fatalf("after cache reset: want 1 match, got %d", len(m2))
 	}
 }
 
