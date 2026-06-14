@@ -174,7 +174,7 @@ const summarizeFeedbackPrompt = `You are a diagnosis-summary reviewer. You will 
 
 A good SUMMARIZE output must satisfy ALL THREE criteria:
 1. Contains a section for EVERY hypothesis, either explaining what the inspection found or explicitly stating that no result was available.
-2. Ends with a clear Most Likely Root Cause section that names one hypothesis (or explicitly states that none is well-supported).
+2. The Most Likely Root Cause section names a hypothesis ONLY if that hypothesis was CONFIRMED by its deep-inspection. If no hypothesis was CONFIRMED, the section must say so explicitly and must NOT name a winner or speculate.
 3. Does not invent inspection findings — summaries of hypotheses with no result must say so rather than speculating.
 
 Respond with EXACTLY ONE of:

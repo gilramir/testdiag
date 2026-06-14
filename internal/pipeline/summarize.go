@@ -140,7 +140,7 @@ Your output has two parts:
 - If a deep-inspection result exists: summarize what the inspector found (confirmed, refuted, or inconclusive) and the key evidence.
 - If no result exists (the inspection failed or was not run): state that clearly and briefly restate what the hypothesis claimed.
 
-**Part 2 — Most likely root cause.** After all summaries, state which hypothesis you believe is most likely and the key reason. If the evidence does not favor any hypothesis, say so explicitly.
+**Part 2 — Most likely root cause.** After all summaries, name the most likely root cause — but ONLY if at least one hypothesis was CONFIRMED by its deep-inspection. If no hypothesis was CONFIRMED (all were REFUTED, INCONCLUSIVE, or had no result), write "No hypothesis was confirmed by the evidence" and do not guess.
 
 Output ONLY Markdown with this structure (no preamble, no extra sections):
 
