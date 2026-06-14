@@ -49,10 +49,14 @@ go run . --output ./reports <url>
 
 The pipeline is sequential: fetch failures → run each failure through the stage state machine independently, one at a time → write a report.
 
-- **`main.go`** — CLI parsing (`github.com/gilramir/argparse/v2`), config load,
-  resolving the LLM for each stage (`cfg.LLMForStage` / `cfg.LLMForStageOptional`),
-  starting the per-stage LLM proxies (a `proxyManager` runs at most one proxy per
-  distinct `(endpoint, advertised tool set)` and repoints each LLM's `BaseURL`), and
+- **`main.go`** — CLI parsing via `github.com/gilramir/argparse/v2` using the
+  idiomatic `Function` callback style: `main()` builds the `ArgumentParser`, registers
+  all flags and positionals, sets `Command.Function` to `run(*options)`, and calls
+  `ap.ParseAndExit()`. `ParseAndExit` owns `-h`, parse errors, and function errors
+  so nothing calls `os.Exit` directly. `run()` handles config load, resolving the LLM
+  for each stage (`cfg.LLMForStage` / `cfg.LLMForStageOptional`), starting the
+  per-stage LLM proxies (a `proxyManager` runs at most one proxy per distinct
+  `(endpoint, advertised tool set)` and repoints each LLM's `BaseURL`), and
   `process()`, which runs each failure through the `pipeline` one at a time in order.
   LLMs for optional stages (HYPOTHESIZE, SUMMARIZE, LESSONS, and all feedback stages)
   fall back to the logparse LLM when not explicitly configured. Each failed test is fully
