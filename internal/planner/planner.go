@@ -157,7 +157,12 @@ When done, output ONLY Markdown in exactly this format:
 ### Low Priority
 - ` + "`path/to/file`" + ` — reason (examine if time permits)
 
-The bracketed annotation is optional but strongly preferred when you know a line range or a useful search term. Omit sections that have no entries.`
+The bracketed annotation is optional but strongly preferred when you know a line range or a useful search term. Omit sections that have no entries.
+
+STRICT FORMAT RULES (a downstream program parses this list):
+- Every entry MUST begin with a single concrete workspace-relative file path wrapped in backticks, immediately after the "- " marker. The file path must be the FIRST backticked token on the line.
+- List real files only. Do NOT list globs, directories, or guessed paths. Before you put a path in the list, confirm it exists with file_exists (or that find_files / function_lookup returned it). A plan that names a file which does not exist will be rejected.
+- Put any search pattern in the bracketed grep annotation, never as the leading token.`
 
 func buildSystemPrompt(brief, hypothesis string) string {
 	var b strings.Builder

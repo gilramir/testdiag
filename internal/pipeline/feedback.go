@@ -137,10 +137,11 @@ Output nothing else.`, m.ShortLabel(), m.FeedbackConditionCriterion())
 // planInspectFeedbackPrompt is the criteria for a PLANINSPECTION output.
 const planInspectFeedbackPrompt = `You are reviewing an inspection plan produced by a planning stage. The plan lists workspace source files that a subsequent deep-inspection agent should examine to investigate a specific hypothesis about a failing test.
 
-A good inspection plan must satisfy ALL THREE criteria:
+A good inspection plan must satisfy ALL FOUR criteria:
 1. Lists at least two specific workspace-relative file paths with a note for each.
 2. Each entry explains WHY the file is relevant to the specific hypothesis — not just "this is a source file."
 3. Entries are prioritized so the most critical files appear first.
+4. Every listed file path is a real workspace file. Using the tool call log, flag any path that the planning agent never confirmed exists (e.g. via file_exists, find_files, or function_lookup) — guessed paths are not acceptable.
 
 A tool call log may be provided showing what the planning agent actually searched. When present, also assess:
 - Whether the file paths in the plan were actually located by the tool calls (not just guessed from the brief).
