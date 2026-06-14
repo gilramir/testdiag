@@ -205,14 +205,21 @@ Each hypothesis must:
 - Name a specific component, code path, or interaction described in the architecture document (if provided) or implied by the brief.
 - Tie back to concrete evidence in the investigation brief.
 - Describe a specific nondeterministic condition: race, ordering assumption, timing window, resource limit, port or state collision, environmental variation.
+- List the exact code symbols (file, class, function/method) that would prove or disprove it, and the minimal set of files an engineer would need to inspect to confirm or refute it.
 
 Output ONLY Markdown with this exact format (no preamble, no trailing text):
 
 ## Hypothesis 1: <short title summarizing the nondeterministic mechanism>
-<2–4 sentence description tying the architecture to the log evidence; state WHAT could be racing/racing/timing-out/colliding and WHERE it likely lives in the codebase>
+<2–4 sentence description tying the architecture to the log evidence; state WHAT could be racing/timing-out/colliding and WHERE it likely lives in the codebase>
+
+**Key symbols:** ` + "`<file>:<class>.<function>`" + `, … (the symbols whose implementation would confirm or refute this)
+**Files to inspect:** ` + "`<file>`" + `, … (minimal set needed to confirm or refute)
 
 ## Hypothesis 2: <short title>
 <description>
+
+**Key symbols:** …
+**Files to inspect:** …
 
 (Add further hypotheses only if well supported by the evidence.)`
 

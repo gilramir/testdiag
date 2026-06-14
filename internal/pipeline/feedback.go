@@ -114,10 +114,12 @@ Output nothing else.`
 // hypothesizeFeedbackPrompt is the criteria for a HYPOTHESIZE hypothesis list.
 const hypothesizeFeedbackPrompt = `You are a hypothesis reviewer. You will be shown a list of hypotheses produced by a systems-analysis stage about why a flaky test failed. Assess whether the hypotheses are actionable.
 
-A good hypothesis list must satisfy ALL THREE criteria:
+A good hypothesis list must satisfy ALL FIVE criteria:
 1. Contains at least one hypothesis (1–3 is ideal; more than 5 is too many).
 2. Each hypothesis names a specific system component or code path and ties it to evidence in the investigation brief.
 3. Each hypothesis describes a plausible nondeterministic condition (race, timing, ordering, resource, environment) — not just "the code might be wrong."
+4. Each hypothesis includes a "Key symbols" line listing specific file:class.function identifiers whose implementation would confirm or refute it.
+5. Each hypothesis includes a "Files to inspect" line listing the minimal set of files needed to confirm or refute it.
 
 Respond with EXACTLY ONE of:
 - The single word APPROVED if all three criteria are met, OR
