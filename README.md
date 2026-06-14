@@ -21,7 +21,7 @@ Given a Jenkins build URL:
 
    ```
    DOWNLOAD → LOGPARSE → FEEDBACK → HYPOTHESIZE → FEEDBACK →
-   [DEEPINSPECT → FEEDBACK] × N → COMBINE → FEEDBACK
+   [PLANINSPECTION → FEEDBACK → DEEPINSPECT → FEEDBACK] × N → COMBINE → FEEDBACK
    ```
 
    - **DOWNLOAD** — saves the test's full failure log under `.testdiag/logs/`.
@@ -38,12 +38,23 @@ Given a Jenkins build URL:
      (`.testdiag/handoff/<test>.hypothesize.md`). Zero hypotheses abandons the test.
    - **FEEDBACK** — checks the hypothesis list; retries up to
      `hypothesize_max_feedbacks` times if it falls short.
+   - **PLANINSPECTION × N** — one fresh agent per hypothesis, equipped with the
+     same **workspace source tools** as DEEPINSPECT. It does **not** investigate
+     deeply — its job is breadth-first: survey the workspace (using `find_files`,
+     `search_repo`, `grep`, `read_lines`) and produce a **prioritized, annotated
+     list of files** for DEEPINSPECT to examine
+     (`.testdiag/handoff/<test>.h<N>.planinspect.md`). A failed plan is
+     noted but does not stop the pipeline; DEEPINSPECT works from the brief alone
+     in that case.
+   - **FEEDBACK per PLANINSPECTION** — checks each plan; retries up to
+     `planinspection_max_feedbacks` times.
    - **DEEPINSPECT × N** — one fresh agent per hypothesis, equipped with
-     **workspace source tools** (jailed to the checkout). Each agent investigates
-     whether its specific hypothesis is CONFIRMED / REFUTED / INCONCLUSIVE in the
-     actual code. The raw log is withheld entirely. A hypothesis that errors or
-     exhausts its feedback budget is marked as failed but does **not** stop the
-     pipeline.
+     **workspace source tools** (jailed to the checkout). It receives both the
+     hypothesis and the PLANINSPECTION file list and is instructed to start from
+     those files. Each agent determines whether its hypothesis is CONFIRMED /
+     REFUTED / INCONCLUSIVE. The raw log is withheld entirely. A hypothesis that
+     errors or exhausts its feedback budget is marked as failed but does **not**
+     stop the pipeline.
    - **FEEDBACK per DEEPINSPECT** — checks each DEEPINSPECT result independently;
      retries up to `deepinspect_max_feedbacks` times.
    - **COMBINE** — reads all hypotheses and DEEPINSPECT results (successful and
@@ -58,8 +69,8 @@ Given a Jenkins build URL:
 
 You can assign a **different LLM to every stage** (see [Setup](#setup)): a cheap
 model can parse the log, generate hypotheses, and combine results, while a stronger
-model does the deep source tracing. All optional stages default to the logparse LLM
-when not explicitly assigned.
+model does the source tracing. PLANINSPECTION defaults to the deepinspect LLM when
+not explicitly assigned; all other optional stages default to the logparse LLM.
 
 Each test is diagnosed independently — its own agents, no shared memory. Tests are
 run sequentially so the output and the `run_script` approval prompts stay coherent
@@ -90,9 +101,9 @@ context window.
 | `run_script` | Write + run a shell/Python script — **only after operator approval** |
 | `notebook` | Per-hypothesis Markdown scratchpad (`append` / `read`) the agent uses as working memory |
 
-The two log tools are not advertised to DEEPINSPECT and are hard-disabled while it
-runs, so it cannot re-read the raw log — it works from the brief and its assigned
-hypothesis. LOGPARSE, HYPOTHESIZE, FEEDBACK, and COMBINE use no tools (their inputs
+The two log tools are not advertised to PLANINSPECTION or DEEPINSPECT and are
+hard-disabled while either runs, so neither can re-read the raw log — both work from
+the brief. LOGPARSE, HYPOTHESIZE, FEEDBACK, and COMBINE use no tools (their inputs
 are given inline).
 
 The prompt steers the model to `count_lines`/`grep`/`read_lines` rather than
@@ -144,24 +155,29 @@ model    = "your-strong-model"
 
 [stages]
 logparse    = "fast"   # reads the log, writes the brief
-deepinspect = "deep"   # gets the brief + source tools, finds the root cause
+deepinspect = "deep"   # gets the brief + plan + source tools, finds the root cause
 
-# Optional: override individual stages (all default to "fast" / logparse LLM)
-# hypothesize          = "fast"
-# combine              = "fast"
-# logparse_feedback    = "fast"
-# hypothesize_feedback = "fast"
-# deepinspect_feedback = "fast"
-# combine_feedback     = "fast"
+# Optional: override individual stages
+# planinspection           = "deep"   # surveys workspace for relevant files; defaults to deepinspect LLM
+# hypothesize              = "fast"   # all others default to logparse LLM
+# combine                  = "fast"
+# logparse_feedback        = "fast"
+# hypothesize_feedback     = "fast"
+# planinspection_feedback  = "fast"
+# deepinspect_feedback     = "fast"
+# combine_feedback         = "fast"
 ```
 
-The two required stages are `logparse` and `deepinspect`. Everything else falls
-back to the logparse LLM when not explicitly assigned.
+The two required stages are `logparse` and `deepinspect`. PLANINSPECTION defaults to
+the deepinspect LLM; everything else falls back to the logparse LLM when not
+explicitly assigned.
 
 ### Architecture document
 
-HYPOTHESIZE can read a document describing your system's architecture, which helps
-it generate more targeted hypotheses. Point it at a workspace-relative path:
+HYPOTHESIZE and PLANINSPECTION can both read a document describing your system's
+architecture. For HYPOTHESIZE it helps generate more targeted hypotheses; for
+PLANINSPECTION it helps identify which components are most likely to be involved.
+Point it at a workspace-relative path:
 
 ```toml
 [workspace]
@@ -174,14 +190,18 @@ If the file is absent or the key is unset, HYPOTHESIZE works from the brief alon
 
 ```toml
 [stage_config]
-logparse_max_feedbacks         = 2   # TESTDIAG_LOGPARSE_MAX_FEEDBACKS
-hypothesize_max_feedbacks      = 2   # TESTDIAG_HYPOTHESIZE_MAX_FEEDBACKS
-deepinspect_max_feedbacks      = 1   # TESTDIAG_DEEPINSPECT_MAX_FEEDBACKS
-deepinspect_max_tool_iterations = 50  # TESTDIAG_DEEPINSPECT_MAX_TOOL_ITERATIONS
-combine_max_feedbacks          = 2   # TESTDIAG_COMBINE_MAX_FEEDBACKS
+logparse_max_feedbacks                = 2   # TESTDIAG_LOGPARSE_MAX_FEEDBACKS
+hypothesize_max_feedbacks             = 2   # TESTDIAG_HYPOTHESIZE_MAX_FEEDBACKS
+planinspection_max_feedbacks          = 1   # TESTDIAG_PLANINSPECTION_MAX_FEEDBACKS
+planinspection_max_tool_iterations    = 20  # TESTDIAG_PLANINSPECTION_MAX_TOOL_ITERATIONS
+deepinspect_max_feedbacks             = 1   # TESTDIAG_DEEPINSPECT_MAX_FEEDBACKS
+deepinspect_max_tool_iterations       = 50  # TESTDIAG_DEEPINSPECT_MAX_TOOL_ITERATIONS
+combine_max_feedbacks                 = 2   # TESTDIAG_COMBINE_MAX_FEEDBACKS
 ```
 
 Set any `*_max_feedbacks` to `0` to disable feedback for that stage.
+PLANINSPECTION has a lower tool-iteration budget than DEEPINSPECT by design — it
+is a breadth-first survey, not a deep investigation.
 
 Per-LLM secrets can come from `TESTDIAG_LLM_<NAME>_API_KEY` /
 `TESTDIAG_LLM_<NAME>_BASE_URL` / `TESTDIAG_LLM_<NAME>_MODEL`.
@@ -209,8 +229,9 @@ testdiag -v https://jenkins.example.com/job/myapp/1234/
 
 ## Test → source-file mapping
 
-DEEPINSPECT works better when it knows which source file the failing test lives
-in. You can supply a mapper executable that performs this translation:
+Both PLANINSPECTION and DEEPINSPECT work better when they know which source file
+the failing test lives in. You can supply a mapper executable that performs this
+translation:
 
 ```toml
 [workspace]
@@ -229,9 +250,9 @@ with the workspace root as its working directory, so relative paths and workspac
 files are accessible. Anything the mapper writes to stderr is passed through.
 
 When `mapper` is empty, the test returns nothing, or the mapper exits non-zero,
-DEEPINSPECT receives no source-file hint and locates the file itself via the
-`list_directory`/`grep` tools. A mapper failure prints a warning but does not
-abort the diagnosis.
+PLANINSPECTION and DEEPINSPECT receive no source-file hint and locate the file
+themselves via the directory/grep tools. A mapper failure prints a warning but does
+not abort the diagnosis.
 
 ## How tool calls reach the model
 
@@ -247,9 +268,11 @@ agent recognizes.
 
 `main.go` starts the proxies and repoints each stage's `base_url` at one when
 `[proxy].normalize_tool_calls` (or `--debug` / `-v`) is set. It runs at most one
-proxy per distinct `(endpoint, advertised tool set)`: DEEPINSPECT's proxy advertises
-the **source** tools; all other stages (LOGPARSE, HYPOTHESIZE, FEEDBACK, COMBINE)
-advertise **none**, and stages sharing the same endpoint reuse one proxy instance.
+proxy per distinct `(endpoint, advertised tool set)`: PLANINSPECTION and DEEPINSPECT
+both advertise the **source** tools; all other stages (LOGPARSE, HYPOTHESIZE,
+FEEDBACK, COMBINE) advertise **none**, and tool-less stages sharing the same endpoint
+reuse one proxy instance. DEEPINSPECT always gets its own proxy even when it shares
+an endpoint with PLANINSPECTION, because it has operator-interrupt support wired in.
 
 ## Layout
 
@@ -261,12 +284,14 @@ internal/pipeline           stage state machine and all stage implementations
   download.go               DOWNLOAD stage
   logparse.go               LOGPARSE stage (with feedback retry loop)
   hypothesize.go            HYPOTHESIZE stage (with feedback retry loop)
-  deepinspect.go            DEEPINSPECT-all stage (one run per hypothesis)
+  planinspect.go            PLANINSPECTION-all stage (one breadth-first survey per hypothesis)
+  deepinspect.go            DEEPINSPECT-all stage (one deep investigation per hypothesis)
   combine.go                COMBINE stage (with feedback retry loop)
   feedback.go               feedbackChecker + per-stage quality criteria
-  pipeline.go               Pipeline, Context, FinalResult, Hypothesis, DeepInspectOutcome
+  pipeline.go               Pipeline, Context, FinalResult, Hypothesis, PlanInspectOutcome, DeepInspectOutcome
+internal/planner            the PLANINSPECTION agent: build, prompt, one-shot tool loop
 internal/diagnose           the DEEPINSPECT agent: build, prompt, one-shot tool loop
-internal/mapping            test -> source file  (STUB)
+internal/mapping            test -> source file mapper
 internal/workspace          path jail for the file tools
 internal/tools              the workspace tools (native-schema internal tools)
 internal/report             Markdown report writer (COMBINE body + per-hypothesis appendix)
