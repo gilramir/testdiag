@@ -49,6 +49,15 @@ func newHTTPClient(llm config.LLMSpec) *httpClient {
 	return &httpClient{llm: llm, http: &http.Client{Timeout: 10 * time.Minute}}
 }
 
+// Complete runs a single tool-less chat completion (system + user) against the
+// given LLM and returns the assistant's text. It is the shared entry point for
+// the tool-less stages (LOGPARSE, HYPOTHESIZE, SUMMARIZE, LESSONS, FEEDBACK, and
+// MEMORIZE), which previously each built a throwaway AgenticGoKit agent with
+// tools and memory disabled — exactly this call.
+func Complete(ctx context.Context, llm config.LLMSpec, system, user string) (string, error) {
+	return newHTTPClient(llm).Chat(ctx, system, user, nil)
+}
+
 func (c *httpClient) Chat(ctx context.Context, system, user string, schemas []tools.Schema) (string, error) {
 	reqBody := map[string]interface{}{
 		"model": c.llm.Model,

@@ -1,9 +1,8 @@
 # testdiag
 
 A CLI that diagnoses automated-test failures from a Jenkins build, using an LLM
-(via [AgenticGoKit](https://github.com/agenticgokit/agenticgokit)) that can read
-the project's source with file-inspection tools to find the **root cause** of
-each failure.
+that can read the project's source with file-inspection tools to find the
+**root cause** of each failure.
 
 > Status: reference implementation. It is wired end-to-end but has one
 > deliberate placeholder you must fill in (see [Placeholders](#placeholders)).
@@ -122,10 +121,10 @@ for the operator.
 
 All are **jailed to the workspace root** — the model cannot read outside the
 checkout (absolute paths are reinterpreted relative to the root, and symlinks are
-resolved and re-checked so they can't escape). They are AgenticGoKit *internal
-tools* exposing JSON Schemas, so the provider can call them natively. Every tool
-has hard output caps (file size, line span, match/entry/file counts) to protect the
-context window.
+resolved and re-checked so they can't escape). Each exposes a JSON Schema that the
+diagnosis engine advertises to the model as a `tools` entry. Every tool has hard
+output caps (file size, line span, match/entry/file counts) to protect the context
+window.
 
 | Tool | Purpose |
 |------|---------|
@@ -165,7 +164,7 @@ calls and nudges the model to change approach.
 ## Setup
 
 ```sh
-go mod tidy                      # download AgenticGoKit + deps
+go mod tidy                      # fetch dependencies
 cp config.example.toml testdiag.toml    # workspace config (check this in)
 $EDITOR testdiag.toml
 cp config.example.toml ~/.config/testdiag/config.toml  # optional user overrides
@@ -313,28 +312,27 @@ not abort the diagnosis.
 
 ## How tool calls reach the model
 
-AgenticGoKit v0.5.x's OpenAI adapter does **no** native tool calling: it never
-sends a `tools` array and reads only `choices[].message.content`, leaving the agent
-to parse tool calls out of text. testdiag bridges this with an in-process reverse
-proxy (`internal/llmproxy`) that fronts your LLM endpoint: it injects the workspace
-tools into each request and runs the response through `internal/toolproto`, which
-normalizes the various native tool-call syntaxes open models emit (GPT-OSS Harmony,
-Gemma ` ```tool_code `, Mistral `[TOOL_CALLS]`, Nemotron `<TOOLCALL>`, Llama 3.x
-bare-JSON / `<|python_tag|>`, plus structured `tool_calls`) into the one shape the
-agent recognizes.
+testdiag drives the tool-calling conversation itself, so it works with any
+OpenAI-API-compatible server regardless of whether the model emits native
+`tool_calls` or one of the open-model text syntaxes. The tool-using stages
+(PLANINSPECTION, DEEPINSPECT) run the loop in `internal/inspect`: each turn it sends
+the model a system prompt plus the accumulated **fact tree** and the workspace
+tools' JSON schemas, then runs the reply through `internal/toolproto`, which
+normalizes the various native tool-call syntaxes (GPT-OSS Harmony, Gemma
+` ```tool_code `, Mistral `[TOOL_CALLS]`, Nemotron `<TOOLCALL>`, Llama 3.x bare-JSON
+/ `<|python_tag|>`, plus structured `tool_calls`) into one canonical shape, executes
+the calls, folds the results into the tree, and repeats. See `CLAUDE.md` (the
+`internal/inspect` and `internal/knowledge` notes) for the design.
 
-`main.go` starts the proxies and repoints each stage's `base_url` at one when
-`[proxy].normalize_tool_calls` (or `--debug` / `-v`) is set. It runs at most one
-proxy per distinct `(endpoint, advertised tool set)`: PLANINSPECTION and DEEPINSPECT
-both advertise the **source** tools; all other stages (LOGPARSE, HYPOTHESIZE,
-FEEDBACK, SUMMARIZE) advertise **none**, and tool-less stages sharing the same endpoint
-reuse one proxy instance. DEEPINSPECT always gets its own proxy even when it shares
-an endpoint with PLANINSPECTION, because it has operator-interrupt support wired in.
+The tool-less stages (LOGPARSE, HYPOTHESIZE, SUMMARIZE, LESSONS, FEEDBACK) make a
+single completion call. `internal/llmproxy` is a now-vestigial reverse proxy that
+`main.go` still optionally points the tool-less stages at for `--debug` conversation
+logging; the tool-using stages bypass it.
 
 ## Layout
 
 ```
-main.go                     CLI + sequential orchestration + per-stage proxies
+main.go                     CLI + sequential orchestration
 internal/config             named LLMs, stage assignments, per-stage knobs, env overrides
 internal/jenkins            fetch /api/json, parse failed cases
 internal/pipeline           stage state machine and all stage implementations
@@ -347,17 +345,18 @@ internal/pipeline           stage state machine and all stage implementations
   lessons.go                LESSONS stage (tool-less meta-analysis, no feedback gate)
   feedback.go               feedbackChecker + per-stage quality criteria
   pipeline.go               Pipeline, Context, FinalResult, Hypothesis, PlanInspectOutcome, DeepInspectOutcome
-internal/planner            the PLANINSPECTION agent: build, prompt, one-shot tool loop
-internal/diagnose           the DEEPINSPECT agent: build, prompt, one-shot tool loop
+internal/inspect            the LLM client (Complete) + tool-loop engine + result ingest
+internal/knowledge          the fact tree the tool loop accumulates and renders each turn
+internal/planner            PLANINSPECTION stage layer (builds + runs an inspect.Engine)
+internal/diagnose           DEEPINSPECT stage layer (builds + runs an inspect.Engine)
 internal/distill            post-test MEMORIZE step: extract codebase facts → .testdiag/memory.md
 internal/mapping            test -> source file mapper
 internal/workspace          path jail for the file tools
-internal/tools              the workspace tools (native-schema internal tools) + tool-call log (toollog.go)
+internal/tools              the workspace tools (JSON-schema + Execute) + dispatch registry + tool-call log
 internal/report             Markdown report writer (SUMMARIZE body + per-hypothesis appendix)
-internal/llmproxy           in-process proxy fronting an LLM endpoint
+internal/llmproxy           vestigial proxy (debug logging) + the operator InterruptController
 internal/toolproto          normalize open-model tool-call syntaxes
 ```
 
-The `AgenticGoKit/` directory in this tree is a local clone for reference only;
-it is git-ignored and not used by the build (the dependency is fetched normally
-via `go.mod`).
+The git-ignored `AgenticGoKit/` directory is a leftover reference clone; the
+dependency has been removed and nothing uses it.

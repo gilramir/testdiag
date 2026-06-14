@@ -4,12 +4,10 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
-
-	vnext "github.com/agenticgokit/agenticgokit/v1beta"
 
 	"github.com/gilbertr/testdiag/internal/config"
 	"github.com/gilbertr/testdiag/internal/failmode"
+	"github.com/gilbertr/testdiag/internal/inspect"
 	"github.com/gilbertr/testdiag/internal/jenkins"
 )
 
@@ -35,34 +33,12 @@ func newFeedbackChecker(llm config.LLMSpec, systemPrompt string) *feedbackChecke
 // toolLog is the formatted tool-call log from the stage that produced output;
 // pass an empty string for tool-less stages.
 func (f *feedbackChecker) Check(ctx context.Context, test jenkins.FailedTest, output string, toolLog string) (ok bool, critique string, err error) {
-	name := "feedback-" + sanitize(test.FullName())
-	agent, err := vnext.NewBuilder(name).
-		WithConfig(&vnext.Config{
-			Name:         name,
-			SystemPrompt: f.systemPrompt,
-			LLM: vnext.LLMConfig{
-				Provider:    f.llm.Provider,
-				Model:       f.llm.Model,
-				BaseURL:     f.llm.BaseURL,
-				APIKey:      f.llm.APIKey,
-				Temperature: f.llm.Temperature,
-				MaxTokens:   f.llm.MaxTokens,
-			},
-			Tools:   &vnext.ToolsConfig{Enabled: false},
-			Memory:  &vnext.MemoryConfig{Enabled: false},
-			Timeout: 5 * time.Minute,
-		}).
-		Build()
+	raw, err := inspect.Complete(ctx, f.llm, f.systemPrompt, buildFeedbackPrompt(test, output, toolLog))
 	if err != nil {
-		return false, "", fmt.Errorf("building feedback agent: %w", err)
+		return false, "", fmt.Errorf("feedback completion: %w", err)
 	}
 
-	r, err := agent.Run(ctx, buildFeedbackPrompt(test, output, toolLog))
-	if err != nil {
-		return false, "", fmt.Errorf("feedback agent run: %w", err)
-	}
-
-	resp := strings.TrimSpace(r.Content)
+	resp := strings.TrimSpace(raw)
 	if strings.HasPrefix(strings.ToUpper(resp), "APPROVED") {
 		return true, "", nil
 	}

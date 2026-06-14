@@ -1,7 +1,7 @@
 // Package tools implements the workspace file-inspection tools exposed to the
-// LLM as AgenticGoKit internal tools. Each tool implements
-// v1beta.ToolWithSchema (Name/Description/Execute + JSONSchema) so the agent
-// can call them via the provider's native tool-calling loop.
+// LLM. Each tool implements ToolWithSchema (Name/Description/Execute +
+// JSONSchema); the inspect engine advertises their schemas to the model and
+// dispatches calls to them via Execute.
 //
 // Every tool resolves its paths through a single shared *workspace.Workspace,
 // so the model can only read files inside the build's checkout.
@@ -20,10 +20,32 @@ import (
 	"sync/atomic"
 	"time"
 
-	vnext "github.com/agenticgokit/agenticgokit/v1beta"
-
 	"github.com/gilbertr/testdiag/internal/workspace"
 )
+
+// Tool is the read-only interface a workspace tool implements: a name, a
+// description, and an Execute. (This was AgenticGoKit's v1beta.Tool; we own it
+// now that the inspect engine drives the tool loop directly.)
+type Tool interface {
+	Name() string
+	Description() string
+	Execute(ctx context.Context, args map[string]interface{}) (*Result, error)
+}
+
+// ToolWithSchema is a Tool that also advertises a JSON schema for its arguments,
+// so the engine can include it in the request's `tools` array.
+type ToolWithSchema interface {
+	Tool
+	JSONSchema() map[string]interface{}
+}
+
+// Result is the outcome of one tool execution. Content is the structured value
+// the ingest layer folds into the knowledge tree (or a plain string).
+type Result struct {
+	Success bool
+	Content interface{}
+	Error   string
+}
 
 // Guards against pathological inputs blowing up the context window / memory.
 const (
@@ -36,8 +58,8 @@ const (
 // toolDefs is the canonical list of workspace tools. Both Register (which wires
 // them into the agent) and Schemas (which advertises them to the model) build
 // from this single source so the two never drift.
-func toolDefs(ws *workspace.Workspace) []vnext.Tool {
-	return []vnext.Tool{
+func toolDefs(ws *workspace.Workspace) []Tool {
+	return []Tool{
 		&readFileTool{ws: ws},
 		&listDirTool{ws: ws},
 		&fileExistsTool{ws: ws},
@@ -110,35 +132,33 @@ func vlogf(format string, args ...interface{}) {
 	}
 }
 
-// Register registers all workspace tools against ws. Call once at startup,
-// before building any agent. The returned slice is the tool names registered
-// (useful for logging / prompt construction). Each tool is wrapped so that, in
-// verbose mode, every call logs when it starts and finishes — this is the signal
-// that lets an operator tell a running tool from a stalled LLM call.
+// Register builds the workspace tools against ws and records them in the
+// dispatch registry. Call once at startup, before any stage runs. The returned
+// slice is the tool names (useful for logging / prompt construction). Each tool
+// is wrapped so that, in verbose mode, every call logs when it starts and
+// finishes — the signal that lets an operator tell a running tool from a
+// stalled LLM call.
 func Register(ws *workspace.Workspace) []string {
 	defs := toolDefs(ws)
 	names := make([]string, 0, len(defs))
 	registry = make(map[string]*loggingTool, len(defs))
 	for _, d := range defs {
-		tool := &loggingTool{inner: d} // capture for the factory closure
-		vnext.RegisterInternalTool(d.Name(), func() vnext.Tool { return tool })
-		registry[d.Name()] = tool
+		registry[d.Name()] = &loggingTool{inner: d}
 		names = append(names, d.Name())
 	}
 	return names
 }
 
 // registry holds the logging-wrapped tool instances built by Register, keyed by
-// name, so a caller that drives its own tool loop (the inspect engine) can
-// execute tools directly while still getting loop-guarding, verbose logging, and
-// tool-call logging. nil until Register runs.
+// name, so the inspect engine can execute tools directly while still getting
+// loop-guarding, verbose logging, and tool-call logging. nil until Register runs.
 var registry map[string]*loggingTool
 
 // Execute runs the named workspace tool with args, going through the same
-// logging/loop-guard wrapper that AgenticGoKit's path uses. It returns an error
-// if the tool name is unknown or Register has not been called. Log tools that
-// are disabled via SetLogToolsEnabled return their refusal result as usual.
-func Execute(ctx context.Context, name string, args map[string]interface{}) (*vnext.ToolResult, error) {
+// logging/loop-guard wrapper for every call. It returns an error if the tool
+// name is unknown or Register has not been called. Log tools that are disabled
+// via SetLogToolsEnabled return their refusal result as usual.
+func Execute(ctx context.Context, name string, args map[string]interface{}) (*Result, error) {
 	if registry == nil {
 		return nil, fmt.Errorf("tools.Execute: Register has not been called")
 	}
@@ -212,7 +232,7 @@ func fingerprint(name string, args map[string]interface{}) string {
 
 // loopNudge is the result returned in place of a repeated call: it tells the
 // model the call is not producing new information and to change approach.
-func loopNudge(name string, n int) *vnext.ToolResult {
+func loopNudge(name string, n int) *Result {
 	return ok(map[string]interface{}{
 		"loop_detected": true,
 		"message": fmt.Sprintf("You have already called `%s` with these exact arguments %d times "+
@@ -227,19 +247,19 @@ func loopNudge(name string, n int) *vnext.ToolResult {
 // on) emit a start/done progress line around each call. It is otherwise
 // transparent, forwarding Name, Description, and JSONSchema so the provider sees
 // the underlying tool unchanged.
-type loggingTool struct{ inner vnext.Tool }
+type loggingTool struct{ inner Tool }
 
 func (t *loggingTool) Name() string        { return t.inner.Name() }
 func (t *loggingTool) Description() string { return t.inner.Description() }
 
 func (t *loggingTool) JSONSchema() map[string]interface{} {
-	if s, ok := t.inner.(vnext.ToolWithSchema); ok {
+	if s, ok := t.inner.(ToolWithSchema); ok {
 		return s.JSONSchema()
 	}
 	return nil
 }
 
-func (t *loggingTool) Execute(ctx context.Context, args map[string]interface{}) (*vnext.ToolResult, error) {
+func (t *loggingTool) Execute(ctx context.Context, args map[string]interface{}) (*Result, error) {
 	name := t.inner.Name()
 
 	// Break repeated-call loops before doing any work: if the model has asked for
@@ -252,7 +272,7 @@ func (t *loggingTool) Execute(ctx context.Context, args map[string]interface{}) 
 		}
 	}
 
-	var res *vnext.ToolResult
+	var res *Result
 	var err error
 	if !verbose.Load() {
 		res, err = t.inner.Execute(ctx, args)
@@ -275,7 +295,7 @@ func (t *loggingTool) Execute(ctx context.Context, args map[string]interface{}) 
 
 // logFullResult prints a tool call's complete, untruncated result to stderr so an
 // operator running with --debug sees exactly what AGK will feed back to the LLM.
-func logFullResult(name string, args map[string]interface{}, res *vnext.ToolResult, err error) {
+func logFullResult(name string, args map[string]interface{}, res *Result, err error) {
 	var body string
 	switch {
 	case err != nil:
@@ -326,7 +346,7 @@ func briefArgs(args map[string]interface{}) string {
 
 // outcome summarizes a tool result for the done line: nothing on success, or a
 // short error/failed marker otherwise.
-func outcome(res *vnext.ToolResult, err error) string {
+func outcome(res *Result, err error) string {
 	switch {
 	case err != nil:
 		msg := err.Error()
@@ -369,7 +389,7 @@ func SchemasExcluding(exclude ...string) []Schema {
 		if skip[d.Name()] {
 			continue
 		}
-		ws, ok := d.(vnext.ToolWithSchema)
+		ws, ok := d.(ToolWithSchema)
 		if !ok {
 			continue
 		}
@@ -382,13 +402,13 @@ func SchemasExcluding(exclude ...string) []Schema {
 	return out
 }
 
-func ok(content interface{}) *vnext.ToolResult {
-	return &vnext.ToolResult{Success: true, Content: content}
+func ok(content interface{}) *Result {
+	return &Result{Success: true, Content: content}
 }
 
-func fail(format string, args ...interface{}) (*vnext.ToolResult, error) {
+func fail(format string, args ...interface{}) (*Result, error) {
 	msg := fmt.Sprintf(format, args...)
-	return &vnext.ToolResult{Success: false, Error: msg}, fmt.Errorf("%s", msg)
+	return &Result{Success: false, Error: msg}, fmt.Errorf("%s", msg)
 }
 
 func strArg(args map[string]interface{}, key string) (string, bool) {
@@ -448,7 +468,7 @@ func (t *readFileTool) JSONSchema() map[string]interface{} {
 		"required": []string{"path"},
 	}
 }
-func (t *readFileTool) Execute(ctx context.Context, args map[string]interface{}) (*vnext.ToolResult, error) {
+func (t *readFileTool) Execute(ctx context.Context, args map[string]interface{}) (*Result, error) {
 	path, hasPath := strArg(args, "path")
 	if !hasPath {
 		return fail("read_file: 'path' is required")
@@ -508,7 +528,7 @@ func (t *listDirTool) JSONSchema() map[string]interface{} {
 		"required": []string{"path"},
 	}
 }
-func (t *listDirTool) Execute(ctx context.Context, args map[string]interface{}) (*vnext.ToolResult, error) {
+func (t *listDirTool) Execute(ctx context.Context, args map[string]interface{}) (*Result, error) {
 	path, hasPath := strArg(args, "path")
 	if !hasPath {
 		path = "."
@@ -587,7 +607,7 @@ func (t *fileExistsTool) JSONSchema() map[string]interface{} {
 		"required": []string{"path"},
 	}
 }
-func (t *fileExistsTool) Execute(ctx context.Context, args map[string]interface{}) (*vnext.ToolResult, error) {
+func (t *fileExistsTool) Execute(ctx context.Context, args map[string]interface{}) (*Result, error) {
 	path, hasPath := strArg(args, "path")
 	if !hasPath {
 		return fail("file_exists: 'path' is required")
@@ -630,7 +650,7 @@ func (t *countLinesTool) JSONSchema() map[string]interface{} {
 		"required": []string{"paths"},
 	}
 }
-func (t *countLinesTool) Execute(ctx context.Context, args map[string]interface{}) (*vnext.ToolResult, error) {
+func (t *countLinesTool) Execute(ctx context.Context, args map[string]interface{}) (*Result, error) {
 	paths, err := stringSlice(args, "paths")
 	if err != nil {
 		return fail("count_lines: %v", err)
@@ -676,7 +696,7 @@ func (t *readLinesTool) JSONSchema() map[string]interface{} {
 		"required": []string{"path", "start"},
 	}
 }
-func (t *readLinesTool) Execute(ctx context.Context, args map[string]interface{}) (*vnext.ToolResult, error) {
+func (t *readLinesTool) Execute(ctx context.Context, args map[string]interface{}) (*Result, error) {
 	path, hasPath := strArg(args, "path")
 	if !hasPath {
 		return fail("read_lines: 'path' is required")
@@ -740,7 +760,7 @@ func (t *grepTool) JSONSchema() map[string]interface{} {
 		"required": []string{"path", "pattern"},
 	}
 }
-func (t *grepTool) Execute(ctx context.Context, args map[string]interface{}) (*vnext.ToolResult, error) {
+func (t *grepTool) Execute(ctx context.Context, args map[string]interface{}) (*Result, error) {
 	path, hasPath := strArg(args, "path")
 	if !hasPath {
 		return fail("grep: 'path' is required")

@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	vnext "github.com/agenticgokit/agenticgokit/v1beta"
 
 	"github.com/gilbertr/testdiag/internal/workspace"
 )
@@ -131,7 +130,7 @@ func (t *runScriptTool) JSONSchema() map[string]interface{} {
 	}
 }
 
-func (t *runScriptTool) Execute(ctx context.Context, args map[string]interface{}) (*vnext.ToolResult, error) {
+func (t *runScriptTool) Execute(ctx context.Context, args map[string]interface{}) (*Result, error) {
 	language, hasLang := strArg(args, "language")
 	if !hasLang {
 		return fail("run_script: 'language' is required")

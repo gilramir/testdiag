@@ -7,11 +7,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
-
-	vnext "github.com/agenticgokit/agenticgokit/v1beta"
 
 	"github.com/gilbertr/testdiag/internal/config"
+	"github.com/gilbertr/testdiag/internal/inspect"
 	"github.com/gilbertr/testdiag/internal/jenkins"
 	"github.com/gilbertr/testdiag/internal/workspace"
 )
@@ -45,16 +43,11 @@ func (s *lessonsStage) Run(ctx context.Context, sc *Context) error {
 	}
 	archDoc := s.readArchDoc()
 
-	agent, err := s.buildAgent(sc.Test)
+	raw, err := inspect.Complete(ctx, s.llm, lessonsSystemPrompt, buildLessonsPrompt(sc.Test, archDoc, handoffs))
 	if err != nil {
-		return fmt.Errorf("building agent: %w", err)
+		return fmt.Errorf("lessons completion: %w", err)
 	}
-
-	r, err := agent.Run(ctx, buildLessonsPrompt(sc.Test, archDoc, handoffs))
-	if err != nil {
-		return fmt.Errorf("agent run: %w", err)
-	}
-	content := strings.TrimSpace(r.Content)
+	content := strings.TrimSpace(raw)
 	if content == "" {
 		return fmt.Errorf("LESSONS agent returned empty output for %s", sc.Test.FullName())
 	}
@@ -82,27 +75,6 @@ func (s *lessonsStage) save(sc *Context, content string) error {
 		s.pauseFn()
 	}
 	return nil
-}
-
-func (s *lessonsStage) buildAgent(test jenkins.FailedTest) (vnext.Agent, error) {
-	name := "lessons-" + sanitize(test.FullName())
-	return vnext.NewBuilder(name).
-		WithConfig(&vnext.Config{
-			Name:         name,
-			SystemPrompt: lessonsSystemPrompt,
-			LLM: vnext.LLMConfig{
-				Provider:    s.llm.Provider,
-				Model:       s.llm.Model,
-				BaseURL:     s.llm.BaseURL,
-				APIKey:      s.llm.APIKey,
-				Temperature: s.llm.Temperature,
-				MaxTokens:   s.llm.MaxTokens,
-			},
-			Tools:   &vnext.ToolsConfig{Enabled: false},
-			Memory:  &vnext.MemoryConfig{Enabled: false},
-			Timeout: 10 * time.Minute,
-		}).
-		Build()
 }
 
 const lessonsSystemPrompt = `You are reviewing the performance of testdiag, an automated flaky-test diagnosis tool. testdiag runs a pipeline of LLM stages:

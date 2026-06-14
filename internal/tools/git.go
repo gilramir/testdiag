@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	vnext "github.com/agenticgokit/agenticgokit/v1beta"
 
 	"github.com/gilbertr/testdiag/internal/workspace"
 )
@@ -93,7 +92,7 @@ func (t *gitBlameTool) JSONSchema() map[string]interface{} {
 	}
 }
 
-func (t *gitBlameTool) Execute(ctx context.Context, args map[string]interface{}) (*vnext.ToolResult, error) {
+func (t *gitBlameTool) Execute(ctx context.Context, args map[string]interface{}) (*Result, error) {
 	path, hasPath := strArg(args, "path")
 	if !hasPath {
 		return fail("git_blame: 'path' is required")
@@ -181,7 +180,7 @@ func (t *gitLogTool) JSONSchema() map[string]interface{} {
 	}
 }
 
-func (t *gitLogTool) Execute(ctx context.Context, args map[string]interface{}) (*vnext.ToolResult, error) {
+func (t *gitLogTool) Execute(ctx context.Context, args map[string]interface{}) (*Result, error) {
 	limit, hasLimit := intArg(args, "limit")
 	if !hasLimit || limit < 1 {
 		limit = gitLogDefaultLimit

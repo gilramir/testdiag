@@ -7,12 +7,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
-
-	vnext "github.com/agenticgokit/agenticgokit/v1beta"
 
 	"github.com/gilbertr/testdiag/internal/config"
 	"github.com/gilbertr/testdiag/internal/failmode"
+	"github.com/gilbertr/testdiag/internal/inspect"
 	"github.com/gilbertr/testdiag/internal/jenkins"
 	"github.com/gilbertr/testdiag/internal/workspace"
 )
@@ -52,21 +50,17 @@ func (s *hypothesizeStage) Run(ctx context.Context, sc *Context) error {
 	)
 	for feedbacks := 0; ; {
 		stageBanner(s.verbose, string(s.Name()), feedbacks+1)
-		agent, err := s.buildAgent(sc.Test)
-		if err != nil {
-			return fmt.Errorf("building agent: %w", err)
-		}
 		var prompt string
 		if critique == "" {
 			prompt = buildHypothesizePrompt(sc.Test, sc.Brief, archDoc, s.memory)
 		} else {
 			prompt = buildHypothesizeRetryPrompt(sc.Test, sc.Brief, archDoc, s.memory, prevOutput, critique)
 		}
-		r, err := agent.Run(ctx, prompt)
+		raw, err := inspect.Complete(ctx, s.llm, buildHypothesizeSystemPrompt(s.mode), prompt)
 		if err != nil {
-			return fmt.Errorf("agent run: %w", err)
+			return fmt.Errorf("hypothesize completion: %w", err)
 		}
-		content := strings.TrimSpace(r.Content)
+		content := strings.TrimSpace(raw)
 		if content == "" {
 			return fmt.Errorf("HYPOTHESIZE agent returned empty output for %s", sc.Test.FullName())
 		}
@@ -145,27 +139,6 @@ func (s *hypothesizeStage) readArchDoc() string {
 		return ""
 	}
 	return string(data)
-}
-
-func (s *hypothesizeStage) buildAgent(test jenkins.FailedTest) (vnext.Agent, error) {
-	name := "hypothesize-" + sanitize(test.FullName())
-	return vnext.NewBuilder(name).
-		WithConfig(&vnext.Config{
-			Name:         name,
-			SystemPrompt: buildHypothesizeSystemPrompt(s.mode),
-			LLM: vnext.LLMConfig{
-				Provider:    s.llm.Provider,
-				Model:       s.llm.Model,
-				BaseURL:     s.llm.BaseURL,
-				APIKey:      s.llm.APIKey,
-				Temperature: s.llm.Temperature,
-				MaxTokens:   s.llm.MaxTokens,
-			},
-			Tools:   &vnext.ToolsConfig{Enabled: false},
-			Memory:  &vnext.MemoryConfig{Enabled: false},
-			Timeout: 10 * time.Minute,
-		}).
-		Build()
 }
 
 // hypothesisRe matches a numbered hypothesis header in the model output.

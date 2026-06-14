@@ -6,10 +6,9 @@ import (
 	"sort"
 	"strings"
 
-	vnext "github.com/agenticgokit/agenticgokit/v1beta"
-
 	"github.com/gilbertr/testdiag/internal/knowledge"
 	"github.com/gilbertr/testdiag/internal/toolproto"
+	"github.com/gilbertr/testdiag/internal/tools"
 )
 
 // ingest folds the result of one tool call into the knowledge store. Each
@@ -17,7 +16,7 @@ import (
 // model sees coalesced, deduplicated facts on the next turn. Any tool not
 // specially handled (and any failure) falls through to a generic recorder so
 // nothing the agent learned is ever silently dropped.
-func ingest(store *knowledge.Store, c toolproto.Call, res *vnext.ToolResult, err error) {
+func ingest(store *knowledge.Store, c toolproto.Call, res *tools.Result, err error) {
 	if err != nil || res == nil || !res.Success {
 		recordFailure(store, c, res, err)
 		return
@@ -109,7 +108,7 @@ func ingestMatches(store *knowledge.Store, fixedPath string, m map[string]interf
 
 // recordFailure notes a failed or errored call so the model sees that it failed
 // (and why) and does not blindly retry it.
-func recordFailure(store *knowledge.Store, c toolproto.Call, res *vnext.ToolResult, err error) {
+func recordFailure(store *knowledge.Store, c toolproto.Call, res *tools.Result, err error) {
 	msg := "failed"
 	switch {
 	case err != nil:
@@ -125,7 +124,7 @@ func recordFailure(store *knowledge.Store, c toolproto.Call, res *vnext.ToolResu
 // recordGeneric stores the result of a tool we don't specially structure (e.g.
 // git_blame, git_log, count_lines) as a search record carrying a compact
 // summary, so its output is never lost.
-func recordGeneric(store *knowledge.Store, c toolproto.Call, res *vnext.ToolResult) {
+func recordGeneric(store *knowledge.Store, c toolproto.Call, res *tools.Result) {
 	label := argsLabel(c.Args)
 	store.AddSearch(c.Name, label, nil)
 	store.SetSearchNote(c.Name, label, truncate(summarize(res.Content), 1500))

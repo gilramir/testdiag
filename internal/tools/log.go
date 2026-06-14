@@ -6,7 +6,6 @@ import (
 	"regexp"
 	"strings"
 
-	vnext "github.com/agenticgokit/agenticgokit/v1beta"
 
 	"github.com/gilbertr/testdiag/internal/workspace"
 )
@@ -38,7 +37,7 @@ func (t *readLogTool) JSONSchema() map[string]interface{} {
 		"required": []string{"path"},
 	}
 }
-func (t *readLogTool) Execute(ctx context.Context, args map[string]interface{}) (*vnext.ToolResult, error) {
+func (t *readLogTool) Execute(ctx context.Context, args map[string]interface{}) (*Result, error) {
 	if !logToolsEnabled.Load() {
 		return fail("read_log: the raw failure log is not available at this stage. Work from the investigation brief you were given and trace into the actual source files instead.")
 	}
@@ -110,7 +109,7 @@ func (t *grepLogTool) JSONSchema() map[string]interface{} {
 		"required": []string{"path", "pattern"},
 	}
 }
-func (t *grepLogTool) Execute(ctx context.Context, args map[string]interface{}) (*vnext.ToolResult, error) {
+func (t *grepLogTool) Execute(ctx context.Context, args map[string]interface{}) (*Result, error) {
 	if !logToolsEnabled.Load() {
 		return fail("grep_log: the raw failure log is not available at this stage. Work from the investigation brief you were given and trace into the actual source files instead.")
 	}

@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 
-	vnext "github.com/agenticgokit/agenticgokit/v1beta"
 
 	"github.com/gilbertr/testdiag/internal/workspace"
 )
@@ -79,7 +78,7 @@ func (t *notebookTool) JSONSchema() map[string]interface{} {
 // point of the tool, so repeated calls are not a stuck loop.
 func (t *notebookTool) loopExempt() {}
 
-func (t *notebookTool) Execute(ctx context.Context, args map[string]interface{}) (*vnext.ToolResult, error) {
+func (t *notebookTool) Execute(ctx context.Context, args map[string]interface{}) (*Result, error) {
 	rel := currentNotebookPath()
 	if rel == "" {
 		return fail("notebook: note-taking is not enabled for this run")

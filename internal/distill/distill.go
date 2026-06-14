@@ -13,9 +13,8 @@ import (
 	"strings"
 	"time"
 
-	vnext "github.com/agenticgokit/agenticgokit/v1beta"
-
 	"github.com/gilbertr/testdiag/internal/config"
+	"github.com/gilbertr/testdiag/internal/inspect"
 	"github.com/gilbertr/testdiag/internal/jenkins"
 	"github.com/gilbertr/testdiag/internal/workspace"
 )
@@ -75,34 +74,12 @@ func (d *Distiller) Distill(ctx context.Context, test jenkins.FailedTest) error 
 
 	userMsg := buildPrompt(test, handoffs)
 
-	name := "distill-" + sanitize(test.FullName())
-	agent, err := vnext.NewBuilder(name).
-		WithConfig(&vnext.Config{
-			Name:         name,
-			SystemPrompt: systemPrompt,
-			LLM: vnext.LLMConfig{
-				Provider:    d.llm.Provider,
-				Model:       d.llm.Model,
-				BaseURL:     d.llm.BaseURL,
-				APIKey:      d.llm.APIKey,
-				Temperature: d.llm.Temperature,
-				MaxTokens:   d.llm.MaxTokens,
-			},
-			Tools:   &vnext.ToolsConfig{Enabled: false},
-			Memory:  &vnext.MemoryConfig{Enabled: false},
-			Timeout: 5 * time.Minute,
-		}).
-		Build()
+	raw, err := inspect.Complete(ctx, d.llm, systemPrompt, userMsg)
 	if err != nil {
-		return fmt.Errorf("building distill agent: %w", err)
+		return fmt.Errorf("distill completion: %w", err)
 	}
 
-	r, err := agent.Run(ctx, userMsg)
-	if err != nil {
-		return fmt.Errorf("distill agent run: %w", err)
-	}
-
-	facts := strings.TrimSpace(r.Content)
+	facts := strings.TrimSpace(raw)
 	if facts == "" || strings.EqualFold(facts, "NONE") {
 		return nil
 	}

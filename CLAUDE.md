@@ -19,7 +19,7 @@ SUMMARIZE → FEEDBACK → LESSONS
 - **FEEDBACK** — tool-less LLM gate: accepts the brief or rejects it with a critique; LOGPARSE retries with the critique up to `logparse_max_feedbacks` times
 - **HYPOTHESIZE** — tool-less LLM pass that reads the brief plus an optional architecture document and produces a ranked list of 1–N hypotheses; 0 hypotheses abandons the test
 - **FEEDBACK** — gate on the hypothesis list (`hypothesize_max_feedbacks`)
-- **PLANINSPECTION × N** — one fresh tool-using agent per hypothesis; breadth-first workspace survey that produces a prioritized, annotated file list for DEEPINSPECT to follow; soft-fails per hypothesis. Runs on the **own tool-loop engine** (`internal/inspect`), not AgenticGoKit — see the inspect/knowledge note below.
+- **PLANINSPECTION × N** — one fresh tool-using agent per hypothesis; breadth-first workspace survey that produces a prioritized, annotated file list for DEEPINSPECT to follow; soft-fails per hypothesis. Runs on the **own tool-loop engine** (`internal/inspect`) — see the inspect/knowledge note below.
 - **FEEDBACK per PLANINSPECTION** — gate on each plan (`planinspection_max_feedbacks`); also a deterministic Go gate that rejects any plan listing files that do not exist in the workspace (see `internal/pipeline/planinspect.go`)
 - **DEEPINSPECT × N** — one fresh agent per hypothesis, jailed to the workspace source tools; investigates whether that hypothesis is CONFIRMED / REFUTED / INCONCLUSIVE. Also runs on the `internal/inspect` engine.
 - **FEEDBACK per DEEPINSPECT** — gate on each DEEPINSPECT result (`deepinspect_max_feedbacks`); a failed hypothesis is soft-failed (noted but does not stop the pipeline)
@@ -29,7 +29,7 @@ SUMMARIZE → FEEDBACK → LESSONS
 
 Each stage hands off to the next through a Markdown file on disk (`.testdiag/handoff/`) and each LLM can be configured independently. Different LLMs can be assigned to different stages so a cheap model can parse the log while a stronger one does the source tracing.
 
-**Two execution models.** The tool-less stages (LOGPARSE, HYPOTHESIZE, SUMMARIZE, LESSONS, and every FEEDBACK gate) run on **AgenticGoKit** fronted by the normalizing `internal/llmproxy`. The two **tool-using** stages (PLANINSPECTION, DEEPINSPECT) do NOT: they run on our **own** tool-loop engine, `internal/inspect`, which talks to the model server directly and accumulates results into a deduplicated **fact tree** (`internal/knowledge`) re-rendered into the context every turn. This replaced AGK's continuation loop, which kept only the single most recent tool result, dropped the original user message after the first tool call, and nudged the model to stop calling tools — together starving the deep agent of working memory. See the `internal/inspect` and `internal/knowledge` notes below.
+**LLM calls are all ours.** There is no agent framework: every LLM call goes through the small OpenAI-compatible client in `internal/inspect` (`client.go`). The tool-less stages (LOGPARSE, HYPOTHESIZE, SUMMARIZE, LESSONS, MEMORIZE, and every FEEDBACK gate) make a single `inspect.Complete(system, user)` call. The two **tool-using** stages (PLANINSPECTION, DEEPINSPECT) run the full `inspect.Engine` loop, which accumulates results into a deduplicated **fact tree** (`internal/knowledge`) re-rendered into the context every turn. This whole design replaced AgenticGoKit, whose continuation loop kept only the single most recent tool result, dropped the original user message after the first tool call, and nudged the model to stop calling tools — together starving the deep agent of working memory. AGK has since been removed entirely (no `go.mod` dependency). The `internal/llmproxy` reverse proxy still optionally fronts the tool-less stages (for `--debug` conversation logging); the tool-using stages bypass it. See the `internal/inspect`, `internal/knowledge`, and `internal/llmproxy` notes below.
 
 See `README.md` for the user-facing description and `plan.txt` for the original design notes.
 
@@ -173,11 +173,13 @@ The pipeline is sequential: fetch failures → run each failure through the stag
   glob/substring locate), history (`git_blame` line-range blame, `git_log` recent
   commits with optional `--patch` — both shell out to `git` with the workspace
   root as CWD and are output-capped; used to spot recent regressions), and
-  log-oriented (`read_log` with `tail`, `grep_log` with context lines). They implement `v1beta.Tool` with a `JSONSchema()` so the provider
-  calls them natively. `Register(ws)` registers them **once at startup** via the global
-  `vnext.RegisterInternalTool` before any agent is built, so each tool is a
-  single shared, **stateless** instance reused across every test — never store
-  per-test state on a tool. All have hard output caps (file size, line span,
+  log-oriented (`read_log` with `tail`, `grep_log` with context lines). They
+  implement the package-local `tools.ToolWithSchema` interface (`Name`/
+  `Description`/`Execute` returning `*tools.Result`, plus `JSONSchema()`).
+  `Register(ws)` builds them **once at startup** into a dispatch `registry` keyed
+  by name (consulted by `tools.Execute`), so each tool is a single shared,
+  **stateless** instance reused across every test — never store per-test state on
+  a tool. All have hard output caps (file size, line span,
   match/entry/file counts) to protect the context window. The two log tools
   (`read_log`, `grep_log`, named in `tools.LogToolNames`) are gated by a
   package-level flag: DEEPINSPECT calls `tools.SetLogToolsEnabled(false)` so they
@@ -211,8 +213,10 @@ The pipeline is sequential: fetch failures → run each failure through the stag
   (`planinspect.go`, `deepinspect.go`) call `ResetToolLog()` before each hypothesis
   run and `CollectToolLog()` after, writing the result to the handoff directory.
 
-- **`internal/inspect`** — the **own tool-loop engine** that drives PLANINSPECTION
-  and DEEPINSPECT (replacing AgenticGoKit for those stages). `NewEngine(llm, Options{
+- **`internal/inspect`** — owns all LLM interaction. `client.go` is the small
+  OpenAI-compatible `/chat/completions` client; `Complete(ctx, llm, system, user)`
+  is the single-shot call every tool-less stage uses. The **tool-loop engine**
+  drives PLANINSPECTION and DEEPINSPECT: `NewEngine(llm, Options{
   MaxIterations, MaxChars, Schemas, Interrupt})` builds an engine; `Run(ctx,
   RunInput{System, Task})` drives the loop. Each turn sends exactly **two messages**
   — a static `System` prompt and a `user` message that is the freshly-rendered fact
@@ -278,45 +282,42 @@ The pipeline is sequential: fetch failures → run each failure through the stag
 - **`internal/toolproto`** — normalizes the various native tool-call syntaxes
   open models emit (GPT-OSS Harmony, Gemma ` ```tool_code `, Mistral
   `[TOOL_CALLS]`, Nemotron `<TOOLCALL>`, Llama 3.x bare-JSON / `<|python_tag|>`,
-  plus structured `tool_calls`) into the one text shape AgenticGoKit's parser
-  recognizes: `TOOL_CALL{"name":...,"args":{...}}`. `Normalize` rewrites the text;
-  `Parse` goes one step further and returns `[]Call` (normalizing first, then
-  extracting every `TOOL_CALL{…}`) — that is the entry point the `internal/inspect`
-  engine uses to drive its own loop. Pure functions; well covered by tests.
+  plus structured `tool_calls`) into the one canonical text shape:
+  `TOOL_CALL{"name":...,"args":{...}}`. `Normalize` rewrites the text; `Parse` goes
+  one step further and returns `[]Call` (normalizing first, then extracting every
+  `TOOL_CALL{…}`) — that is the entry point the `internal/inspect` engine uses to
+  read the model's tool intent. Pure functions; well covered by tests.
 
-- **`internal/llmproxy`** — an in-process reverse proxy fronting the LLM endpoint.
-  Needed because AgenticGoKit v0.5.x's OpenAI adapter does **no** native tool
-  calling: it never sends a `tools` array and reads only `choices[].message.content`,
-  leaving the agent to parse tool calls out of text. The proxy injects the workspace
-  tools into each request and runs the response `content` (and any structured
-  `tool_calls`) through `toolproto` before AgenticGoKit sees it. `main.go` starts it
-  and repoints each LLM's `BaseURL` at it. It now fronts only the **tool-less** stages
-  (LOGPARSE, HYPOTHESIZE, SUMMARIZE, LESSONS, and the FEEDBACK gates); PLANINSPECTION
-  and DEEPINSPECT bypass it entirely because the `internal/inspect` engine does the
-  proxy's two jobs (tool injection + tool-call normalization) itself. The
-  `InterruptController` still lives here (it is the sole stdin reader, muxing
-  `run_script` confirmations and operator-interrupt lines) and is passed to the
-  inspect engine via the `inspect.Interrupter` interface.
+- **`internal/llmproxy`** — an in-process reverse proxy that can front an LLM
+  endpoint, injecting the workspace tools into a request and running the response
+  `content` (and any structured `tool_calls`) through `toolproto`. It was built to
+  compensate for AgenticGoKit's OpenAI adapter doing no native tool calling; with
+  AGK gone it is **largely vestigial** — `main.go` still repoints the tool-less
+  stages' `BaseURL` at it so `--debug` conversation logging keeps working, but the
+  tool-using stages bypass it (the `internal/inspect` engine does tool injection and
+  normalization itself). The still-useful `InterruptController` lives here: it is the
+  sole stdin reader (muxing `run_script` confirmations and operator-interrupt lines)
+  and is handed to the inspect engine via the `inspect.Interrupter` interface.
+  Retiring the proxy and relocating `InterruptController` is a planned cleanup.
 
 ## Key conventions
 
-- **AgenticGoKit** is the LLM agent framework, imported as
-  `vnext "github.com/agenticgokit/agenticgokit/v1beta"`. The OpenAI-compatible
-  provider is wired in via a blank import in `main.go`
-  (`_ ".../plugins/llm/openai"`); `provider = "openai"` with a custom `base_url`
-  targets any OpenAI-API-compatible server, including local ones.
-- The `AgenticGoKit/` directory in the tree is a **local reference clone only** —
-  it is git-ignored and NOT used by the build; the dependency is fetched normally
-  via `go.mod` (currently `v0.5.9`). Don't edit it expecting build effects.
+- **No agent framework.** All LLM interaction is hand-rolled in `internal/inspect`
+  against any OpenAI-API-compatible server (`provider = "openai"` with a custom
+  `base_url`, including local ones). AgenticGoKit was removed; do not reintroduce a
+  framework dependency without a strong reason.
+- The git-ignored `AgenticGoKit/` directory in the tree is a leftover reference
+  clone, no longer used by anything (the dependency is gone from `go.mod`). Safe to
+  delete; don't expect editing it to have any effect.
 - Module path is `github.com/gilbertr/testdiag`; Go 1.24.
-- New tools exposed to the model must implement `v1beta.Tool`, be added to the
-  slice in `tools.Register`, take paths only via `workspace.Resolve`, and cap
-  their output size.
-- All agents are built with **no builder preset**: internal tools attach via
-  `Tools.Enabled` alone (DiscoverInternalTools), and presets like `ChatAgent` would
-  clobber the system prompt / temperature and re-enable memory after `WithConfig`.
-- The `feedbackChecker` pattern (tool-less agent with a stage-specific system prompt
-  that outputs `APPROVED` or `NEEDS REVISION: <critique>`) is the standard way to
-  gate stage output quality. Each stage that needs a feedback gate constructs one
-  in `pipeline.New` with the appropriate prompt constant from `feedback.go` and
-  passes it to the stage constructor.
+- New tools exposed to the model must implement `tools.ToolWithSchema`
+  (`Name`/`Description`/`Execute` returning `*tools.Result`, plus `JSONSchema()`),
+  be added to the slice in `tools.toolDefs`, take paths only via
+  `workspace.Resolve`, and cap their output size. Add an `ingest` case in
+  `internal/inspect/ingest.go` if the result should fold structurally into the fact
+  tree (otherwise the generic recorder captures it).
+- The `feedbackChecker` pattern (a single `inspect.Complete` call with a
+  stage-specific system prompt that outputs `APPROVED` or `NEEDS REVISION:
+  <critique>`) is the standard way to gate stage output quality. Each stage that
+  needs a feedback gate constructs one in `pipeline.New` with the appropriate prompt
+  constant from `feedback.go` and passes it to the stage constructor.

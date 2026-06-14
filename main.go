@@ -26,10 +26,6 @@ import (
 
 	"github.com/gilramir/argparse/v2"
 
-	// Side-effect import: registers the OpenAI-compatible LLM provider so
-	// config "provider = openai" with a custom base_url works for local servers.
-	_ "github.com/agenticgokit/agenticgokit/plugins/llm/openai"
-
 	"github.com/gilbertr/testdiag/internal/config"
 	"github.com/gilbertr/testdiag/internal/distill"
 	"github.com/gilbertr/testdiag/internal/failmode"

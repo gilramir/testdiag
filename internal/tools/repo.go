@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 
-	vnext "github.com/agenticgokit/agenticgokit/v1beta"
 
 	"github.com/gilbertr/testdiag/internal/workspace"
 )
@@ -111,7 +110,7 @@ func (t *searchRepoTool) JSONSchema() map[string]interface{} {
 		"required": []string{"regex"},
 	}
 }
-func (t *searchRepoTool) Execute(ctx context.Context, args map[string]interface{}) (*vnext.ToolResult, error) {
+func (t *searchRepoTool) Execute(ctx context.Context, args map[string]interface{}) (*Result, error) {
 	pattern, has := strArg(args, "regex")
 	if !has {
 		return fail("search_repo: 'regex' is required")
@@ -326,7 +325,7 @@ func (t *findFilesTool) JSONSchema() map[string]interface{} {
 		"required": []string{"pattern"},
 	}
 }
-func (t *findFilesTool) Execute(ctx context.Context, args map[string]interface{}) (*vnext.ToolResult, error) {
+func (t *findFilesTool) Execute(ctx context.Context, args map[string]interface{}) (*Result, error) {
 	pattern, has := strArg(args, "pattern")
 	if !has {
 		return fail("find_files: 'pattern' is required")

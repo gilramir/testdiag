@@ -6,12 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
-
-	vnext "github.com/agenticgokit/agenticgokit/v1beta"
 
 	"github.com/gilbertr/testdiag/internal/config"
 	"github.com/gilbertr/testdiag/internal/failmode"
+	"github.com/gilbertr/testdiag/internal/inspect"
 	"github.com/gilbertr/testdiag/internal/jenkins"
 	"github.com/gilbertr/testdiag/internal/workspace"
 )
@@ -54,24 +52,20 @@ func (s *logParseStage) Run(ctx context.Context, sc *Context) error {
 	)
 	for feedbacks := 0; ; {
 		stageBanner(s.verbose, string(s.Name()), feedbacks+1)
-		agent, err := s.buildAgent(sc.Test)
-		if err != nil {
-			return fmt.Errorf("building agent: %w", err)
-		}
 		var prompt string
 		if critique == "" {
 			prompt = buildLogParsePrompt(sc.Test, logText)
 		} else {
 			prompt = buildLogParseRetryPrompt(sc.Test, logText, prevBrief, critique)
 		}
-		r, err := agent.Run(ctx, prompt)
+		content, err := inspect.Complete(ctx, s.llm, buildLogParseSystemPrompt(s.mode), prompt)
 		if err != nil {
-			return fmt.Errorf("agent run: %w", err)
+			return fmt.Errorf("logparse completion: %w", err)
 		}
-		if strings.TrimSpace(r.Content) == "" {
+		if strings.TrimSpace(content) == "" {
 			return fmt.Errorf("agent returned empty brief for %s", sc.Test.FullName())
 		}
-		brief := ensureTestFile(r.Content, sc.Test)
+		brief := ensureTestFile(content, sc.Test)
 
 		if s.feedback == nil {
 			return s.saveBrief(sc, brief)
@@ -137,30 +131,6 @@ func ensureTestFile(brief string, test jenkins.FailedTest) string {
 	}
 	return strings.TrimRight(brief, "\n") +
 		fmt.Sprintf("\nThe test file that failed is: %s\n", test.ClassName)
-}
-
-// buildAgent constructs a tool-less, memoryless single-pass agent on the
-// LOGPARSE LLM. No builder preset is applied: a preset would clobber the system
-// prompt and re-enable memory; we want neither (see diagnose.buildAgent).
-func (s *logParseStage) buildAgent(test jenkins.FailedTest) (vnext.Agent, error) {
-	name := "logparse-" + sanitize(test.FullName())
-	return vnext.NewBuilder(name).
-		WithConfig(&vnext.Config{
-			Name:         name,
-			SystemPrompt: buildLogParseSystemPrompt(s.mode),
-			LLM: vnext.LLMConfig{
-				Provider:    s.llm.Provider,
-				Model:       s.llm.Model,
-				BaseURL:     s.llm.BaseURL,
-				APIKey:      s.llm.APIKey,
-				Temperature: s.llm.Temperature,
-				MaxTokens:   s.llm.MaxTokens,
-			},
-			Tools:   &vnext.ToolsConfig{Enabled: false},
-			Memory:  &vnext.MemoryConfig{Enabled: false},
-			Timeout: 10 * time.Minute,
-		}).
-		Build()
 }
 
 // writeBrief saves the brief to .testdiag/handoff/<test>.logparse.md and returns

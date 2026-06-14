@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"strings"
 
-	vnext "github.com/agenticgokit/agenticgokit/v1beta"
 
 	"github.com/gilbertr/testdiag/internal/workspace"
 )
@@ -118,7 +117,7 @@ func (t *functionLookupTool) JSONSchema() map[string]interface{} {
 	}
 }
 
-func (t *functionLookupTool) Execute(ctx context.Context, args map[string]interface{}) (*vnext.ToolResult, error) {
+func (t *functionLookupTool) Execute(ctx context.Context, args map[string]interface{}) (*Result, error) {
 	lang, hasLang := strArg(args, "language")
 	if !hasLang {
 		return fail("function_lookup: 'language' is required")
