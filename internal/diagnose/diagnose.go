@@ -152,7 +152,7 @@ func (d *Diagnoser) buildAgent(input DiagnoseInput) (vnext.Agent, error) {
 	return vnext.NewBuilder(name).
 		WithConfig(&vnext.Config{
 			Name:         name,
-			SystemPrompt: buildSystemPrompt(input.Brief, input.Hypothesis),
+			SystemPrompt: buildSystemPrompt(input.Brief, input.Hypothesis, d.maxToolIterations),
 			LLM: vnext.LLMConfig{
 				Provider:    d.llm.Provider,
 				Model:       d.llm.Model,

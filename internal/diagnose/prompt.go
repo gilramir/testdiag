@@ -8,9 +8,9 @@ import (
 )
 
 // systemPromptBase instructs the DEEPINSPECT agent. It is the static part;
-// the brief and hypothesis are appended to it in buildSystemPrompt so they
-// survive AGK's continuation loop (which preserves System across every tool
-// iteration but replaces User with "Previous response + tool results").
+// the brief, hypothesis, and tool budget are appended in buildSystemPrompt so
+// they survive AGK's continuation loop (which preserves System across every
+// tool iteration but replaces User with "Previous response + tool results").
 const systemPromptBase = `You are an expert software engineer and CI failure analyst. Your job is to investigate ONE specific hypothesis about why a test failed, find evidence confirming or refuting it in the actual source code, and report your conclusion.
 
 You are given:
@@ -49,10 +49,10 @@ The specific nondeterministic condition (race / timing / ordering / resource / e
 ## Confidence
 High / Medium / Low and why.`
 
-// buildSystemPrompt appends the brief and hypothesis to the static instructions
-// so the agent always has them in scope regardless of how many tool iterations
-// have elapsed.
-func buildSystemPrompt(brief, hypothesis string) string {
+// buildSystemPrompt appends the brief, hypothesis, and tool budget to the
+// static instructions so the agent always has them in scope regardless of how
+// many tool iterations have elapsed.
+func buildSystemPrompt(brief, hypothesis string, maxToolIterations int) string {
 	var b strings.Builder
 	b.WriteString(systemPromptBase)
 	if strings.TrimSpace(brief) != "" {
@@ -63,6 +63,12 @@ func buildSystemPrompt(brief, hypothesis string) string {
 		b.WriteString("\n\n## Hypothesis to investigate\n")
 		b.WriteString(strings.TrimSpace(hypothesis))
 	}
+	fmt.Fprintf(&b, "\n\n## Tool budget\n"+
+		"You have a budget of **%d tool calls**. Spend it wisely:\n"+
+		"- If you already have `search_repo` results for a regex in your notebook, reuse them — do not repeat the same search.\n"+
+		"- Stop as soon as you have a CONFIRMED or REFUTED verdict; do not keep calling tools once the answer is clear.\n"+
+		"- Reserve the last 1–2 calls for the notebook read and your final synthesis if needed.",
+		maxToolIterations)
 	return b.String()
 }
 
