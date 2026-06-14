@@ -65,6 +65,10 @@ var verbose atomic.Bool
 // SetVerbose enables or disables the per-tool progress logging emitted to stderr.
 func SetVerbose(v bool) { verbose.Store(v) }
 
+// VerboseEnabled reports whether verbose progress logging is on. Used by the
+// inspect engine to decide whether to print the accumulating fact tree.
+func VerboseEnabled() bool { return verbose.Load() }
+
 // debug, when set, makes the loggingTool wrapper print each tool call's COMPLETE
 // result to stderr — the exact, untruncated Content that AGK feeds back to the
 // LLM. The verbose start/done lines and the tool log only show summaries; this is
@@ -74,6 +78,10 @@ var debug atomic.Bool
 
 // SetDebug enables or disables full tool-result logging to stderr.
 func SetDebug(v bool) { debug.Store(v) }
+
+// DebugEnabled reports whether full debug logging is on. Used by the inspect
+// engine to decide whether to print the full LLM request/response each turn.
+func DebugEnabled() bool { return debug.Load() }
 
 // logToolsEnabled gates the log-reading tools (read_log, grep_log). The
 // DEEPINSPECT stage turns it off so the agent works only from the LOGPARSE
@@ -110,13 +118,39 @@ func vlogf(format string, args ...interface{}) {
 func Register(ws *workspace.Workspace) []string {
 	defs := toolDefs(ws)
 	names := make([]string, 0, len(defs))
+	registry = make(map[string]*loggingTool, len(defs))
 	for _, d := range defs {
 		tool := &loggingTool{inner: d} // capture for the factory closure
 		vnext.RegisterInternalTool(d.Name(), func() vnext.Tool { return tool })
+		registry[d.Name()] = tool
 		names = append(names, d.Name())
 	}
 	return names
 }
+
+// registry holds the logging-wrapped tool instances built by Register, keyed by
+// name, so a caller that drives its own tool loop (the inspect engine) can
+// execute tools directly while still getting loop-guarding, verbose logging, and
+// tool-call logging. nil until Register runs.
+var registry map[string]*loggingTool
+
+// Execute runs the named workspace tool with args, going through the same
+// logging/loop-guard wrapper that AgenticGoKit's path uses. It returns an error
+// if the tool name is unknown or Register has not been called. Log tools that
+// are disabled via SetLogToolsEnabled return their refusal result as usual.
+func Execute(ctx context.Context, name string, args map[string]interface{}) (*vnext.ToolResult, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("tools.Execute: Register has not been called")
+	}
+	t, ok := registry[name]
+	if !ok {
+		return nil, fmt.Errorf("unknown tool %q", name)
+	}
+	return t.Execute(ctx, args)
+}
+
+// Has reports whether a tool with the given name is registered.
+func Has(name string) bool { _, ok := registry[name]; return ok }
 
 // loopThreshold is the number of identical tool calls (same tool, same
 // arguments) within one diagnosis after which we stop executing the call and

@@ -39,6 +39,7 @@ import (
 	"github.com/gilbertr/testdiag/internal/config"
 	"github.com/gilbertr/testdiag/internal/diagnose"
 	"github.com/gilbertr/testdiag/internal/failmode"
+	"github.com/gilbertr/testdiag/internal/inspect"
 	"github.com/gilbertr/testdiag/internal/jenkins"
 	"github.com/gilbertr/testdiag/internal/planner"
 	"github.com/gilbertr/testdiag/internal/workspace"
@@ -61,7 +62,7 @@ const (
 
 // Hypothesis is one candidate explanation produced by HYPOTHESIZE.
 type Hypothesis struct {
-	Index       int    // 1-based
+	Index       int // 1-based
 	Title       string
 	Description string
 }
@@ -171,11 +172,11 @@ type Pipeline struct {
 // verbose; it should print "Press <ENTER> to continue..." and block until the
 // user presses ENTER. When pauseFn is non-nil the handoff is printed even if
 // verbose is false.
-func New(cfg *config.Config, ws *workspace.Workspace, spec PipelineSpec, mode failmode.Mode, background, memory string, verbose bool, drainInterrupt func(), pauseFn func()) *Pipeline {
+func New(cfg *config.Config, ws *workspace.Workspace, spec PipelineSpec, mode failmode.Mode, background, memory string, verbose bool, interrupt inspect.Interrupter, drainInterrupt func(), pauseFn func()) *Pipeline {
 	sc := &cfg.StageConfig
 
-	plnr := planner.New(ws, spec.Plan.LLM, background, memory, sc.PlanMaxToolIterations, cfg.Workspace.Mapper)
-	diagnoser := diagnose.New(ws, spec.DeepInspect.LLM, mode, background, memory, sc.DeepInspectMaxToolIterations, cfg.Workspace.Mapper, drainInterrupt)
+	plnr := planner.New(ws, spec.Plan.LLM, background, memory, sc.PlanMaxToolIterations, sc.InspectMaxKnowledgeChars, cfg.Workspace.Mapper)
+	diagnoser := diagnose.New(ws, spec.DeepInspect.LLM, mode, background, memory, sc.DeepInspectMaxToolIterations, sc.InspectMaxKnowledgeChars, cfg.Workspace.Mapper, interrupt, drainInterrupt)
 
 	// Build feedback checkers for each stage.
 	var lpFB, hFB, planFB, diFB, cFB *feedbackChecker

@@ -173,13 +173,13 @@ func run(opts *options) error {
 
 	// Front each LLM with the in-process normalizing proxy. Stages sharing the
 	// same (endpoint, tool set) reuse one proxy instance.
+	// The tool-using stages (PLANINSPECTION, DEEPINSPECT) no longer go through
+	// the proxy: internal/inspect drives their tool loop itself, talking to the
+	// model server directly and doing its own tool-injection and tool-call
+	// normalization. Only the tool-less, AGK-driven stages are fronted.
 	pm := newProxyManager(cfg.Proxy, opts.Verbose, ic)
 	defer pm.Close()
 	if pm.enabled() {
-		var deepTools []llmproxy.Tool
-		if cfg.Proxy.InjectTools {
-			deepTools = toProxyTools(tools.SchemasExcluding(tools.LogToolNames...))
-		}
 		// Tool-less stages share a proxy when they use the same endpoint.
 		for stageName, llmPtr := range map[string]*config.LLMSpec{
 			"logparse":                &logparseLLM,
@@ -196,15 +196,6 @@ func run(opts *options) error {
 			if *llmPtr, err = pm.front(stageName, *llmPtr, nil); err != nil {
 				return err
 			}
-		}
-		// PLANINSPECTION uses workspace tools but no interrupt support.
-		if planLLM, err = pm.front("planinspection", planLLM, deepTools); err != nil {
-			return err
-		}
-		// DEEPINSPECT uses workspace tools and interrupt support. Always gets its
-		// own proxy (the "deepinspect" key suffix ensures no sharing with PLANINSPECTION).
-		if deepinspectLLM, err = pm.front("deepinspect", deepinspectLLM, deepTools); err != nil {
-			return err
 		}
 	}
 
@@ -266,7 +257,7 @@ func run(opts *options) error {
 		}
 	}
 	mode := failmode.Mode{AlwaysFails: opts.AlwaysFails}
-	pl := pipeline.New(cfg, ws, spec, mode, background, memory, opts.Verbose, ic.Drain, pauseFn)
+	pl := pipeline.New(cfg, ws, spec, mode, background, memory, opts.Verbose, ic, ic.Drain, pauseFn)
 	distiller := distill.New(ws, memorizeLLM)
 
 	fmt.Printf("Found %d failed test(s). Workspace: %s\n", len(failures), ws.Root())
@@ -427,14 +418,6 @@ func toolSig(ts []llmproxy.Tool) string {
 	}
 	sort.Strings(names)
 	return strings.Join(names, ",")
-}
-
-func toProxyTools(schemas []tools.Schema) []llmproxy.Tool {
-	out := make([]llmproxy.Tool, 0, len(schemas))
-	for _, s := range schemas {
-		out = append(out, llmproxy.Tool{Name: s.Name, Description: s.Description, Parameters: s.Parameters})
-	}
-	return out
 }
 
 func filterTests(failures []jenkins.FailedTest, substrings []string) []jenkins.FailedTest {

@@ -27,14 +27,14 @@ import (
 // Stage names — the keys used in the [stages] table.
 const (
 	StageLogParse            = "logparse"
-	StageLogParseFeedback    = "logparse_feedback"    // optional; falls back to logparse LLM
-	StageHypothsize          = "hypothesize"          // optional; falls back to logparse LLM
-	StageHypothsizeFeedback  = "hypothesize_feedback" // optional; falls back to hypothesize LLM
-	StagePlanInspect         = "planinspection"         // optional; falls back to deepinspect LLM
+	StageLogParseFeedback    = "logparse_feedback"       // optional; falls back to logparse LLM
+	StageHypothsize          = "hypothesize"             // optional; falls back to logparse LLM
+	StageHypothsizeFeedback  = "hypothesize_feedback"    // optional; falls back to hypothesize LLM
+	StagePlanInspect         = "planinspection"          // optional; falls back to deepinspect LLM
 	StagePlanInspectFeedback = "planinspection_feedback" // optional; falls back to planinspection LLM
 	StageDeepInspect         = "deepinspect"
 	StageDeepInspectFeedback = "deepinspect_feedback" // optional; falls back to deepinspect LLM
-	StageSummarize           = "summarize"             // optional; falls back to logparse LLM
+	StageSummarize           = "summarize"            // optional; falls back to logparse LLM
 	StageSummarizeFeedback   = "summarize_feedback"   // optional; falls back to summarize LLM
 	StageLessons             = "lessons"              // optional; falls back to logparse LLM
 	StageMemoize             = "memorize"             // optional; falls back to logparse LLM
@@ -43,8 +43,8 @@ const (
 // Config is the fully-resolved configuration for a testdiag run.
 type Config struct {
 	Jenkins     Jenkins            `toml:"jenkins"`
-	LLMs        map[string]LLMSpec `toml:"llms"`        // named LLMs, referenced by stages
-	Stages      map[string]string  `toml:"stages"`      // stage name -> LLM name
+	LLMs        map[string]LLMSpec `toml:"llms"`   // named LLMs, referenced by stages
+	Stages      map[string]string  `toml:"stages"` // stage name -> LLM name
 	Proxy       Proxy              `toml:"proxy"`
 	Workspace   Workspace          `toml:"workspace"`
 	Output      Output             `toml:"output"`
@@ -150,6 +150,11 @@ type StageConfig struct {
 	// SummarizeMaxFeedbacks is the number of times the FEEDBACK stage may reject
 	// the SUMMARIZE output. 0 disables SUMMARIZE feedback.
 	SummarizeMaxFeedbacks int `toml:"summarize_max_feedbacks"`
+	// InspectMaxKnowledgeChars caps the size, in characters, of the accumulated
+	// knowledge tree rendered into the PLANINSPECTION/DEEPINSPECT context each
+	// turn. Above this, least-recently-referenced facts are evicted (file line
+	// text first, then whole records). 0 means unlimited.
+	InspectMaxKnowledgeChars int `toml:"inspect_max_knowledge_chars"`
 }
 
 // Output controls how diagnosis reports are written.
@@ -322,6 +327,7 @@ func defaults() *Config {
 			DeepInspectMaxFeedbacks:      1,
 			DeepInspectMaxToolIterations: 50,
 			SummarizeMaxFeedbacks:        2,
+			InspectMaxKnowledgeChars:     24000,
 		},
 	}
 }
@@ -376,6 +382,7 @@ func applyEnvOverrides(cfg *Config) {
 	setInt(&cfg.StageConfig.DeepInspectMaxFeedbacks, "TESTDIAG_DEEPINSPECT_MAX_FEEDBACKS")
 	setInt(&cfg.StageConfig.DeepInspectMaxToolIterations, "TESTDIAG_DEEPINSPECT_MAX_TOOL_ITERATIONS")
 	setInt(&cfg.StageConfig.SummarizeMaxFeedbacks, "TESTDIAG_SUMMARIZE_MAX_FEEDBACKS")
+	setInt(&cfg.StageConfig.InspectMaxKnowledgeChars, "TESTDIAG_INSPECT_MAX_KNOWLEDGE_CHARS")
 }
 
 // envName upper-cases an LLM name and replaces any non-alphanumeric run with a

@@ -12,11 +12,9 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
-
-	vnext "github.com/agenticgokit/agenticgokit/v1beta"
 
 	"github.com/gilbertr/testdiag/internal/config"
+	"github.com/gilbertr/testdiag/internal/inspect"
 	"github.com/gilbertr/testdiag/internal/jenkins"
 	"github.com/gilbertr/testdiag/internal/mapping"
 	"github.com/gilbertr/testdiag/internal/tools"
@@ -36,28 +34,34 @@ type PlanInput struct {
 
 // Result is the outcome of one PLAN attempt.
 type Result struct {
-	Content     string   // annotated file list as Markdown
-	ToolsCalled []string
+	Content       string // annotated file list as Markdown
+	ToolsCalled   []string
+	KnowledgeJSON []byte // JSON dump of the accumulated fact tree (debug artifact)
 }
 
 // Planner runs the PLAN stage against a fixed workspace.
 type Planner struct {
-	ws                *workspace.Workspace
-	llm               config.LLMSpec
-	background        string
-	memory            string // contents of .testdiag/memory.md (may be empty)
-	maxToolIterations int
-	mapper            string
+	ws         *workspace.Workspace
+	engine     *inspect.Engine
+	background string
+	memory     string // contents of .testdiag/memory.md (may be empty)
+	mapper     string
 }
 
 // New creates a Planner. background is the contents of TEST_AGENT.md (may be
 // empty); memory is the contents of .testdiag/memory.md (may be empty);
 // mapper is the optional path to the test→source mapping executable.
-func New(ws *workspace.Workspace, llm config.LLMSpec, background, memory string, maxToolIterations int, mapper string) *Planner {
-	return &Planner{
-		ws: ws, llm: llm, background: background, memory: memory,
-		maxToolIterations: maxToolIterations, mapper: mapper,
-	}
+// maxToolIterations caps the tool loop; maxChars caps the accumulated knowledge
+// rendered into the context each turn.
+func New(ws *workspace.Workspace, llm config.LLMSpec, background, memory string, maxToolIterations, maxChars int, mapper string) *Planner {
+	// PLAN surveys source files; it never needs the raw log or the notebook.
+	exclude := append(append([]string{}, tools.LogToolNames...), "notebook")
+	engine := inspect.NewEngine(llm, inspect.Options{
+		MaxIterations: maxToolIterations,
+		MaxChars:      maxChars,
+		Schemas:       tools.SchemasExcluding(exclude...),
+	})
+	return &Planner{ws: ws, engine: engine, background: background, memory: memory, mapper: mapper}
 }
 
 // Plan runs one PLAN attempt for one hypothesis. When input.PrevResult and
@@ -73,51 +77,23 @@ func (p *Planner) Plan(ctx context.Context, input PlanInput) (Result, error) {
 	tools.SetLogToolsEnabled(false)
 	defer tools.SetLogToolsEnabled(true)
 
-	agent, err := p.buildAgent(input)
-	if err != nil {
-		return Result{}, fmt.Errorf("building plan agent for %s: %w", input.Test.FullName(), err)
-	}
-
 	tools.ResetLoopGuard()
 	tools.ResetSearchCache()
 	tools.ResetFindFilesCache()
-	r, err := agent.Run(ctx, buildUserPrompt(input, m, p.background, p.memory))
+
+	r, err := p.engine.Run(ctx, inspect.RunInput{
+		System: buildSystemPrompt(input.Brief, input.Hypothesis),
+		Task:   buildUserPrompt(input, m, p.background, p.memory),
+	})
 	if err != nil {
 		return Result{}, fmt.Errorf("plan agent run for %s: %w", input.Test.FullName(), err)
 	}
 
-	return Result{
-		Content:     r.Content,
-		ToolsCalled: uniqueToolNames(r),
-	}, nil
-}
-
-func (p *Planner) buildAgent(input PlanInput) (vnext.Agent, error) {
-	name := fmt.Sprintf("plan-%s-h%d", sanitize(input.Test.FullName()), input.HypothesisIndex)
-	return vnext.NewBuilder(name).
-		WithConfig(&vnext.Config{
-			Name:         name,
-			SystemPrompt: buildSystemPrompt(input.Brief, input.Hypothesis),
-			LLM: vnext.LLMConfig{
-				Provider:    p.llm.Provider,
-				Model:       p.llm.Model,
-				BaseURL:     p.llm.BaseURL,
-				APIKey:      p.llm.APIKey,
-				Temperature: p.llm.Temperature,
-				MaxTokens:   p.llm.MaxTokens,
-			},
-			Tools: &vnext.ToolsConfig{
-				Enabled: true,
-				Reasoning: &vnext.ReasoningConfig{
-					Enabled:           true,
-					MaxIterations:     p.maxToolIterations,
-					ContinueOnToolUse: true,
-				},
-			},
-			Memory:  &vnext.MemoryConfig{Enabled: false},
-			Timeout: 10 * time.Minute,
-		}).
-		Build()
+	out := Result{Content: r.Content, ToolsCalled: r.ToolsCalled}
+	if r.Store != nil {
+		out.KnowledgeJSON, _ = r.Store.JSON()
+	}
+	return out, nil
 }
 
 // systemPromptBase is the static part of the PLAN system prompt. The brief and
@@ -218,24 +194,6 @@ func buildUserPrompt(input PlanInput, m mapping.Result, background, memory strin
 
 	b.WriteString("Survey the workspace and produce the inspection plan in the required Markdown format.")
 	return b.String()
-}
-
-func uniqueToolNames(r *vnext.Result) []string {
-	seen := map[string]bool{}
-	var out []string
-	add := func(name string) {
-		if !seen[name] {
-			seen[name] = true
-			out = append(out, name)
-		}
-	}
-	for _, n := range r.ToolsCalled {
-		add(n)
-	}
-	for _, c := range r.ToolCalls {
-		add(c.Name)
-	}
-	return out
 }
 
 func sanitize(s string) string {

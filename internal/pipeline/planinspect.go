@@ -24,14 +24,14 @@ func peekToolLog() string {
 // outcome and does NOT stop the pipeline — DEEPINSPECT will work from the
 // brief alone for that hypothesis.
 type planInspectAllStage struct {
-	p             *planner.Planner
-	ws            *workspace.Workspace
-	archDocPath   string
-	feedback      *feedbackChecker
-	maxFeedbacks  int
-	resetCounter  func() // resets the proxy's per-run request counter; may be nil
-	verbose       bool
-	pauseFn       func() // non-nil when -p is set; called after each handoff print
+	p            *planner.Planner
+	ws           *workspace.Workspace
+	archDocPath  string
+	feedback     *feedbackChecker
+	maxFeedbacks int
+	resetCounter func() // resets the proxy's per-run request counter; may be nil
+	verbose      bool
+	pauseFn      func() // non-nil when -p is set; called after each handoff print
 }
 
 func newPlanInspectAllStage(p *planner.Planner, ws *workspace.Workspace, archDocPath string, fb *feedbackChecker, maxFeedbacks int, resetCounter func(), verbose bool, pauseFn func()) *planInspectAllStage {
@@ -98,6 +98,7 @@ func (s *planInspectAllStage) runOne(ctx context.Context, sc *Context, h Hypothe
 		}
 		out.Content = res.Content
 		out.ToolsCalled = res.ToolsCalled
+		s.writeKnowledge(sc, h, res.KnowledgeJSON)
 
 		// Deterministic gate: every file path the plan lists must actually
 		// exist in the workspace. The LLM cannot be trusted to verify this, so
@@ -191,6 +192,20 @@ func (s *planInspectAllStage) writeToolLog(sc *Context, h Hypothesis, calls []to
 	base := fmt.Sprintf("%s.h%d.planinspect.tools.md", sanitize(sc.Test.FullName()), h.Index)
 	header := fmt.Sprintf("# Tool Log (PLANINSPECTION) h%d: %s\n\n", h.Index, sc.Test.FullName())
 	_ = os.WriteFile(filepath.Join(dir, base), []byte(header+tools.FormatToolLog(calls)), 0o644)
+}
+
+// writeKnowledge dumps the accumulated fact tree (JSON) for one hypothesis as a
+// debugging artifact next to the tool log.
+func (s *planInspectAllStage) writeKnowledge(sc *Context, h Hypothesis, data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	dir := filepath.Join(s.ws.Root(), handoffDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	base := fmt.Sprintf("%s.h%d.planinspect.knowledge.json", sanitize(sc.Test.FullName()), h.Index)
+	_ = os.WriteFile(filepath.Join(dir, base), data, 0o644)
 }
 
 // listItemRe matches a Markdown list-item marker at the start of a line

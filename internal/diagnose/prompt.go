@@ -44,7 +44,6 @@ You have read-only tools to explore the workspace:
 - search_repo(pattern, path, include, ignore_case): recursively grep the whole tree — use sparingly with an include glob.
 - git_blame(path, start, end): who/what/when last changed a line range — use it to find when a suspicious line was introduced and whether it is a recent change.
 - git_log(path, limit, patch): recent commits that touched a file — a recent commit near the failing code is a prime regression suspect.
-- notebook(action, note): your private scratchpad. Use append before each new inquiry (what you are checking and why); use read to refresh when the trail gets long.
 - run_script(script, language): run a short shell/Python script with operator approval — for targeted experiments only.
 
 Tool paths are always WORKSPACE-RELATIVE. Never pass an absolute path.
@@ -87,12 +86,11 @@ OPTIONAL — include this section ONLY if you found a strong, evidence-backed ro
 		b.WriteString(strings.TrimSpace(plan))
 	}
 
-	fmt.Fprintf(&b, "\n\n## Tool budget\n"+
-		"You have a budget of **%d tool calls**. `notebook` calls (`append` and `read`) are FREE and do NOT count against this budget — use the notebook freely to record every finding.\n"+
-		"- If you already have `search_repo` results for a regex in your notebook, reuse them — do not repeat the same search.\n"+
+	fmt.Fprintf(&b, "\n\n## Tool budget and working memory\n"+
+		"You have a budget of **%d tool rounds**. Everything your tools return is automatically recorded in a running \"What you have learned so far\" section that is shown back to you every turn, with file reads merged into line ranges — so you never need to take notes, and there is no point re-reading something already shown there.\n"+
+		"- Never repeat a search or read whose result already appears in what you have learned — those facts will not change. Spend each round learning something new.\n"+
 		"- Before committing to CONFIRMED or REFUTED, check BOTH sides of the boundary the hypothesis turns on: read the code that would make it true AND the code that would make it false. A verdict drawn from a single file is usually too shallow.\n"+
-		"- While budget remains and the evidence is still thin, keep digging into the strongest lead rather than settling for the first plausible answer.\n"+
-		"- Reserve the last 1–2 non-notebook calls for your final synthesis if needed.",
+		"- While budget remains and the evidence is still thin, keep digging into the strongest lead rather than settling for the first plausible answer.",
 		maxToolIterations)
 	return b.String()
 }

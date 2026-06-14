@@ -17,13 +17,13 @@ import (
 // exhausted) is recorded as a failed outcome but does NOT stop the pipeline —
 // the SUMMARIZE stage will work with whatever results are available.
 type deepInspectAllStage struct {
-	d             *diagnose.Diagnoser
-	ws            *workspace.Workspace
-	feedback      *feedbackChecker // nil when DEEPINSPECT feedback is disabled
-	maxFeedbacks  int
-	resetCounter  func() // resets the proxy's per-run request counter; may be nil
-	verbose       bool
-	pauseFn       func() // non-nil when -p is set; called after each handoff print
+	d            *diagnose.Diagnoser
+	ws           *workspace.Workspace
+	feedback     *feedbackChecker // nil when DEEPINSPECT feedback is disabled
+	maxFeedbacks int
+	resetCounter func() // resets the proxy's per-run request counter; may be nil
+	verbose      bool
+	pauseFn      func() // non-nil when -p is set; called after each handoff print
 }
 
 func newDeepInspectAllStage(d *diagnose.Diagnoser, ws *workspace.Workspace, fb *feedbackChecker, maxFeedbacks int, resetCounter func(), verbose bool, pauseFn func()) *deepInspectAllStage {
@@ -96,6 +96,7 @@ func (s *deepInspectAllStage) runOne(ctx context.Context, sc *Context, h Hypothe
 		}
 		out.Content = res.Content
 		out.ToolsCalled = res.ToolsCalled
+		s.writeKnowledge(sc, h, res.KnowledgeJSON)
 
 		if s.feedback == nil {
 			out.FeedbackApproved = true
@@ -142,6 +143,20 @@ func (s *deepInspectAllStage) writeToolLog(sc *Context, h Hypothesis, calls []to
 	base := fmt.Sprintf("%s.h%d.deepinspect.tools.md", sanitize(sc.Test.FullName()), h.Index)
 	header := fmt.Sprintf("# Tool Log (DEEPINSPECT) h%d: %s\n\n", h.Index, sc.Test.FullName())
 	_ = os.WriteFile(filepath.Join(dir, base), []byte(header+tools.FormatToolLog(calls)), 0o644)
+}
+
+// writeKnowledge dumps the accumulated fact tree (JSON) for one hypothesis as a
+// debugging artifact next to the tool log.
+func (s *deepInspectAllStage) writeKnowledge(sc *Context, h Hypothesis, data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	dir := filepath.Join(s.ws.Root(), handoffDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	base := fmt.Sprintf("%s.h%d.deepinspect.knowledge.json", sanitize(sc.Test.FullName()), h.Index)
+	_ = os.WriteFile(filepath.Join(dir, base), data, 0o644)
 }
 
 // save writes the DEEPINSPECT result to a handoff file so the distillation

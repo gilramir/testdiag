@@ -86,6 +86,36 @@ func Normalize(content string) string {
 	return content
 }
 
+// Parse normalizes content (rewriting any native tool-call syntax into the
+// canonical TOOL_CALL form) and then extracts every TOOL_CALL{...} occurrence
+// into a Call. It returns nil when the content carries no tool call — i.e. the
+// model produced a final natural-language answer. This is the entry point for a
+// caller that drives the tool loop itself rather than handing content to
+// AgenticGoKit's parser.
+func Parse(content string) []Call {
+	normalized := Normalize(content)
+	var calls []Call
+	rest := normalized
+	for {
+		idx := strings.Index(rest, "TOOL_CALL")
+		if idx < 0 {
+			break
+		}
+		after := rest[idx+len("TOOL_CALL"):]
+		obj, end := firstJSONObject(after)
+		if obj == nil {
+			// No JSON object follows this marker; skip past it and keep looking.
+			rest = after
+			continue
+		}
+		if c, ok := callFromMap(obj); ok {
+			calls = append(calls, c)
+		}
+		rest = after[end:]
+	}
+	return calls
+}
+
 // FromStructured converts an OpenAI-style choices[].message.tool_calls array
 // (each element shaped like {"function":{"name":..,"arguments":"{...}"}}) into
 // canonical TOOL_CALL text. Used by the proxy when a server returns structured
