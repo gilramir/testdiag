@@ -59,17 +59,25 @@ max_tokens     = 4096
 # ---------------------------------------------------------------------------
 # Stage → LLM assignments.
 #
+# Every stage's LLM can be chosen independently. Each optional stage falls back
+# to another stage's LLM when you don't assign it (shown below), so you only need
+# to set the ones you want to differ.
+#
 # Required:
 #   logparse    — reads the raw failure log, writes the investigation brief
 #   deepinspect — gets ONLY the brief + one hypothesis + source tools; no raw log
 #
-# Optional (all default to the logparse LLM when unset):
-#   hypothesize          — reads the brief + architecture doc, produces hypotheses
-#   summarize            — summarizes each hypothesis and identifies the most likely root cause
-#   logparse_feedback    — checks the LOGPARSE brief quality
-#   hypothesize_feedback — checks the HYPOTHESIZE hypothesis list
-#   deepinspect_feedback — checks each DEEPINSPECT result
-#   summarize_feedback   — checks the SUMMARIZE output
+# Optional (fallback in parentheses):
+#   hypothesize             — reads the brief + architecture doc, produces hypotheses (-> logparse)
+#   planinspection          — tool-using survey: finds the files DEEPINSPECT should read (-> deepinspect)
+#   summarize               — summarizes each hypothesis and names the most likely root cause (-> logparse)
+#   lessons                 — meta-analysis of the run for developers (-> logparse)
+#   memorize                — distills durable codebase facts into .testdiag/memory.md (-> logparse)
+#   logparse_feedback       — checks the LOGPARSE brief quality (-> logparse)
+#   hypothesize_feedback    — checks the HYPOTHESIZE hypothesis list (-> hypothesize)
+#   planinspection_feedback — checks each PLANINSPECTION plan (-> planinspection)
+#   deepinspect_feedback    — checks each DEEPINSPECT result (-> deepinspect)
+#   summarize_feedback      — checks the SUMMARIZE output (-> summarize)
 #
 # Stages that share the same endpoint and tool set reuse one proxy instance, so
 # pointing multiple optional stages at "fast" costs nothing extra.
@@ -78,12 +86,16 @@ max_tokens     = 4096
 [stages]
 logparse    = "fast"
 deepinspect = "deep"
-# hypothesize          = "fast"
-# summarize            = "fast"
-# logparse_feedback    = "fast"
-# hypothesize_feedback = "fast"
-# deepinspect_feedback = "fast"
-# summarize_feedback   = "fast"
+# hypothesize             = "fast"
+# planinspection          = "deep"
+# summarize               = "fast"
+# lessons                 = "fast"
+# memorize                = "fast"
+# logparse_feedback       = "fast"
+# hypothesize_feedback    = "fast"
+# planinspection_feedback = "fast"
+# deepinspect_feedback    = "fast"
+# summarize_feedback      = "fast"
 
 [proxy]
 # Tool-call protocol normalization. Different open models (GPT-OSS, Gemma,
