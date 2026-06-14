@@ -64,10 +64,10 @@ func buildSystemPrompt(brief, hypothesis string, maxToolIterations int) string {
 		b.WriteString(strings.TrimSpace(hypothesis))
 	}
 	fmt.Fprintf(&b, "\n\n## Tool budget\n"+
-		"You have a budget of **%d tool calls**. Spend it wisely:\n"+
+		"You have a budget of **%d tool calls**. `notebook` calls (`append` and `read`) are FREE and do NOT count against this budget — use the notebook freely to record every finding.\n"+
 		"- If you already have `search_repo` results for a regex in your notebook, reuse them — do not repeat the same search.\n"+
 		"- Stop as soon as you have a CONFIRMED or REFUTED verdict; do not keep calling tools once the answer is clear.\n"+
-		"- Reserve the last 1–2 calls for the notebook read and your final synthesis if needed.",
+		"- Reserve the last 1–2 non-notebook calls for your final synthesis if needed.",
 		maxToolIterations)
 	return b.String()
 }
