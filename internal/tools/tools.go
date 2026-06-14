@@ -336,6 +336,15 @@ func boolArg(args map[string]interface{}, key string) bool {
 	return b
 }
 
+// boolArgDefault returns the boolean value of key in args, or def when the key
+// is absent or not a bool.
+func boolArgDefault(args map[string]interface{}, key string, def bool) bool {
+	if v, ok := args[key].(bool); ok {
+		return v
+	}
+	return def
+}
+
 // ---------------------------------------------------------------------------
 // read_file
 // ---------------------------------------------------------------------------
@@ -580,7 +589,7 @@ func (t *grepTool) JSONSchema() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"path":        map[string]interface{}{"type": "string", "description": "Workspace-relative file path to search."},
 			"pattern":     map[string]interface{}{"type": "string", "description": "RE2 regular expression to match against each line."},
-			"ignore_case": map[string]interface{}{"type": "boolean", "description": "Case-insensitive match (default false)."},
+			"ignore_case": map[string]interface{}{"type": "boolean", "description": "Case-insensitive match (default true)."},
 		},
 		"required": []string{"path", "pattern"},
 	}
@@ -595,7 +604,7 @@ func (t *grepTool) Execute(ctx context.Context, args map[string]interface{}) (*v
 		return fail("grep: 'pattern' is required")
 	}
 	expr := pattern
-	if boolArg(args, "ignore_case") {
+	if boolArgDefault(args, "ignore_case", true) {
 		expr = "(?i)" + expr
 	}
 	re, err := regexp.Compile(expr)

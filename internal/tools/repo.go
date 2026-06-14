@@ -104,7 +104,7 @@ func (t *searchRepoTool) JSONSchema() map[string]interface{} {
 			"regex":        map[string]interface{}{"type": "string", "description": "RE2 regular expression to match against each line."},
 			"path":         map[string]interface{}{"type": "string", "description": "Workspace-relative directory to limit the search to. Defaults to the whole workspace ('.')."},
 			"include_glob": map[string]interface{}{"type": "string", "description": "Optional filename glob to restrict which files are searched (e.g. *.py or *Test.java)."},
-			"ignore_case":  map[string]interface{}{"type": "boolean", "description": "Case-insensitive match (default false)."},
+			"ignore_case":  map[string]interface{}{"type": "boolean", "description": "Case-insensitive match (default true)."},
 			"offset":       map[string]interface{}{"type": "integer", "description": "0-based index of the first match to return. Use with limit to page through large result sets. The result set is cached after the first call, so paging is free."},
 			"limit":        map[string]interface{}{"type": "integer", "description": "Maximum number of matches to return. Defaults to all matches from offset onward (up to the per-call cap when no offset is given)."},
 		},
@@ -126,7 +126,7 @@ func (t *searchRepoTool) Execute(ctx context.Context, args map[string]interface{
 		}
 	}
 
-	ignoreCase := boolArg(args, "ignore_case")
+	ignoreCase := boolArgDefault(args, "ignore_case", true)
 	expr := pattern
 	if ignoreCase {
 		expr = "(?i)" + expr
