@@ -7,7 +7,7 @@
 // The workflow is a state machine of stages:
 //
 //	DOWNLOAD → LOGPARSE → FEEDBACK → HYPOTHESIZE → FEEDBACK →
-//	[DEEPINSPECT → FEEDBACK] × N → COMBINE → FEEDBACK
+//	[PLANINSPECTION → FEEDBACK → DEEPINSPECT → FEEDBACK] × N → SUMMARIZE → FEEDBACK → LESSONS
 //
 // LLMs are defined once under [llms.<name>] and each stage points at one by
 // name under [stages]; this lets a cheap model summarize the log while a
@@ -122,7 +122,7 @@ type Workspace struct {
 //	hypothesize_max_feedbacks = 2
 //	deepinspect_max_feedbacks = 1
 //	deepinspect_max_tool_iterations = 50
-//	combine_max_feedbacks = 2
+//	summarize_max_feedbacks = 2
 type StageConfig struct {
 	// LogParseMaxFeedbacks is the number of times the FEEDBACK stage may reject
 	// a LOGPARSE brief before the test is abandoned. 0 disables LOGPARSE feedback.

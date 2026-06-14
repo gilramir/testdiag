@@ -15,7 +15,7 @@ import (
 // deepInspectAllStage runs one DEEPINSPECT+FEEDBACK pass per hypothesis from
 // the HYPOTHESIZE stage. A hypothesis that fails (agent error or feedback
 // exhausted) is recorded as a failed outcome but does NOT stop the pipeline —
-// the COMBINE stage will work with whatever results are available.
+// the SUMMARIZE stage will work with whatever results are available.
 type deepInspectAllStage struct {
 	d             *diagnose.Diagnoser
 	ws            *workspace.Workspace
