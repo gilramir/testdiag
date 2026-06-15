@@ -46,6 +46,10 @@ func render(r pipeline.FinalResult) string {
 	fmt.Fprintf(&b, "| Deep inspections | %d approved, %d failed |\n", approved, failed)
 	fmt.Fprintf(&b, "| Analyzed | %s |\n", time.Now().Format(time.RFC3339))
 	fmt.Fprintf(&b, "| Duration | %s |\n", r.Duration.Round(time.Millisecond))
+	if !r.TotalUsage.IsZero() {
+		fmt.Fprintf(&b, "| Tokens | %d total (%d prompt + %d completion) |\n",
+			r.TotalUsage.Total, r.TotalUsage.Prompt, r.TotalUsage.Completion)
+	}
 	b.WriteString("\n---\n\n")
 
 	body := strings.TrimSpace(r.Summary)
@@ -54,6 +58,23 @@ func render(r pipeline.FinalResult) string {
 	}
 	b.WriteString(body)
 	b.WriteString("\n")
+
+	// Token usage breakdown by stage.
+	if hasNonZeroUsage(r.StageUsages) {
+		b.WriteString("\n---\n\n## Token usage by stage\n\n")
+		b.WriteString("| Stage | Prompt | Completion | Total |\n")
+		b.WriteString("|---|---:|---:|---:|\n")
+		for _, su := range r.StageUsages {
+			if su.Usage.IsZero() {
+				continue
+			}
+			fmt.Fprintf(&b, "| %s | %d | %d | %d |\n",
+				su.Name, su.Usage.Prompt, su.Usage.Completion, su.Usage.Total)
+		}
+		fmt.Fprintf(&b, "| **TOTAL** | **%d** | **%d** | **%d** |\n",
+			r.TotalUsage.Prompt, r.TotalUsage.Completion, r.TotalUsage.Total)
+		b.WriteString("\n")
+	}
 
 	// Appendix: per-hypothesis DEEPINSPECT results for traceability.
 	if len(r.DeepInspects) > 0 {
@@ -78,6 +99,15 @@ func render(r pipeline.FinalResult) string {
 	}
 
 	return b.String()
+}
+
+func hasNonZeroUsage(stages []pipeline.StageUsage) bool {
+	for _, s := range stages {
+		if !s.Usage.IsZero() {
+			return true
+		}
+	}
+	return false
 }
 
 func countOutcomes(outcomes []pipeline.DeepInspectOutcome) (approved, failed int) {

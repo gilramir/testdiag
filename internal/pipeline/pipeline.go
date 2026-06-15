@@ -116,6 +116,13 @@ type DeepInspectOutcome struct {
 	FailReason       string   // populated when Failed=true
 }
 
+// StageUsage pairs a stage name with the tokens consumed during that stage's
+// Run call (including any feedback iterations within it).
+type StageUsage struct {
+	Name  State
+	Usage inspect.TokenUsage
+}
+
 // FinalResult is the end-to-end outcome for one failing test. It is the value
 // returned by Pipeline.Run and consumed by the report writer.
 type FinalResult struct {
@@ -129,6 +136,8 @@ type FinalResult struct {
 	Summary      string               // SUMMARIZE output
 	LessonsPath  string               // LESSONS handoff file (workspace-relative)
 	Duration     time.Duration
+	StageUsages  []StageUsage       // per-stage token counts, in pipeline order
+	TotalUsage   inspect.TokenUsage // sum across all stages
 }
 
 // Context is the per-test state threaded across stages. Each stage reads the
@@ -283,13 +292,19 @@ func (p *Pipeline) States() []State {
 func (p *Pipeline) Run(ctx context.Context, test jenkins.FailedTest) (FinalResult, error) {
 	start := time.Now()
 	sc := &Context{Test: test}
+	var stageUsages []StageUsage
+	var totalUsage inspect.TokenUsage
 	for _, st := range p.stages {
 		if err := ctx.Err(); err != nil {
 			return FinalResult{}, err
 		}
+		inspect.ResetUsage()
 		if err := st.Run(ctx, sc); err != nil {
 			return FinalResult{}, fmt.Errorf("%s stage: %w", st.Name(), err)
 		}
+		u := inspect.CollectUsage()
+		stageUsages = append(stageUsages, StageUsage{Name: st.Name(), Usage: u})
+		totalUsage = totalUsage.Add(u)
 	}
 	return FinalResult{
 		Test:         sc.Test,
@@ -302,5 +317,7 @@ func (p *Pipeline) Run(ctx context.Context, test jenkins.FailedTest) (FinalResul
 		Summary:      sc.Summary,
 		LessonsPath:  sc.LessonsPath,
 		Duration:     time.Since(start),
+		StageUsages:  stageUsages,
+		TotalUsage:   totalUsage,
 	}, nil
 }

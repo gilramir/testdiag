@@ -137,13 +137,18 @@ func (c *httpClient) Chat(ctx context.Context, system, user string, schemas []to
 		return "", fmt.Errorf("LLM returned %d: %s", resp.StatusCode, truncate(string(body), 500))
 	}
 
-	return contentFromResponse(body)
+	content, usage, err := contentFromResponse(body)
+	if err != nil {
+		return "", err
+	}
+	addUsage(usage)
+	return content, nil
 }
 
-// contentFromResponse extracts choices[0].message.content and appends any
+// contentFromResponse extracts choices[0].message.content, appends any
 // structured tool_calls (rewritten to TOOL_CALL text) so a downstream
-// toolproto.Parse sees them.
-func contentFromResponse(body []byte) (string, error) {
+// toolproto.Parse sees them, and returns the token usage reported by the server.
+func contentFromResponse(body []byte) (string, TokenUsage, error) {
 	var parsed struct {
 		Choices []struct {
 			Message struct {
@@ -151,12 +156,17 @@ func contentFromResponse(body []byte) (string, error) {
 				ToolCalls []interface{} `json:"tool_calls"`
 			} `json:"message"`
 		} `json:"choices"`
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+			TotalTokens      int `json:"total_tokens"`
+		} `json:"usage"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return "", fmt.Errorf("parsing response: %w", err)
+		return "", TokenUsage{}, fmt.Errorf("parsing response: %w", err)
 	}
 	if len(parsed.Choices) == 0 {
-		return "", fmt.Errorf("response had no choices")
+		return "", TokenUsage{}, fmt.Errorf("response had no choices")
 	}
 	msg := parsed.Choices[0].Message
 	content := msg.Content
@@ -165,7 +175,12 @@ func contentFromResponse(body []byte) (string, error) {
 			content = strings.TrimSpace(content + "\n" + rendered)
 		}
 	}
-	return content, nil
+	usage := TokenUsage{
+		Prompt:     parsed.Usage.PromptTokens,
+		Completion: parsed.Usage.CompletionTokens,
+		Total:      parsed.Usage.TotalTokens,
+	}
+	return content, usage, nil
 }
 
 // toOpenAITools converts our tool schemas into the OpenAI `tools` array shape.

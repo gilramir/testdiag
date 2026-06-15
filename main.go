@@ -289,7 +289,12 @@ func process(ctx context.Context, pl *pipeline.Pipeline, d *distill.Distiller, f
 			fmt.Fprintf(os.Stderr, "  ✗ %s: writing report: %v\n", test.FullName(), werr)
 		} else {
 			analyzed++
-			fmt.Printf("  ✓ %s -> %s (%s)\n", test.FullName(), path, res.Duration.Round(1e6))
+			if res.TotalUsage.IsZero() {
+				fmt.Printf("  ✓ %s -> %s (%s)\n", test.FullName(), path, res.Duration.Round(1e6))
+			} else {
+				fmt.Printf("  ✓ %s -> %s (%s, %d tok)\n",
+					test.FullName(), path, res.Duration.Round(1e6), res.TotalUsage.Total)
+			}
 		}
 		if derr := d.Distill(ctx, test); derr != nil {
 			fmt.Fprintf(os.Stderr, "  warning: memorize failed for %s: %v\n", test.FullName(), derr)
