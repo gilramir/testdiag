@@ -126,6 +126,12 @@ func (t *runScriptTool) JSONSchema() map[string]interface{} {
 				"type":        "string",
 				"description": "The full script source to execute. Runs with the workspace root as the working directory.",
 			},
+			"description": map[string]interface{}{
+				"type": "string",
+				"description": "A short human-readable label for what this script investigates, e.g. \"count goroutine leaks in test output\". " +
+					"When provided, the knowledge tree stores this label instead of the script body, saving context space. " +
+					"Omit only when you have no concise description; the full script will be recorded in its place.",
+			},
 		},
 		"required": []string{"language", "script"},
 	}

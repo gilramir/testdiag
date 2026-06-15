@@ -85,6 +85,46 @@ func ingest(store *knowledge.Store, c toolproto.Call, res *tools.Result, err err
 		path := strv(c.Args, "path", ".")
 		store.AddSearch("list_directory", path, strSlice(m, "entries"))
 
+	case "run_script":
+		if !boolv(m, "approved") {
+			recordGeneric(store, c, res)
+			return
+		}
+		lang := strv(c.Args, "language", "script")
+		desc := strv(c.Args, "description", "")
+
+		// Derive the label (params key and rendered header text).
+		var label string
+		if desc != "" {
+			label = desc
+		} else {
+			// No description: use the first line of the script as a brief identifier.
+			script := strv(c.Args, "script", "")
+			firstLine := script
+			if i := strings.IndexByte(script, '\n'); i >= 0 {
+				firstLine = strings.TrimSpace(script[:i])
+			}
+			label = lang + ": " + truncate(firstLine, 60)
+		}
+
+		var note strings.Builder
+		if desc == "" {
+			// No description given — we have no choice but to show the script itself.
+			fmt.Fprintf(&note, "script:\n%s\n", truncate(strv(c.Args, "script", ""), 2000))
+		}
+		if boolv(m, "timed_out") {
+			fmt.Fprintf(&note, "(timed out after %ds)\n", intv(m, "timeout_s", 0))
+		}
+		fmt.Fprintf(&note, "exit code: %d\n", intv(m, "exit_code", 0))
+		if stdout := strv(m, "stdout", ""); stdout != "" {
+			fmt.Fprintf(&note, "stdout:\n%s\n", truncate(stdout, 2000))
+		}
+		if stderr := strv(m, "stderr", ""); stderr != "" {
+			fmt.Fprintf(&note, "stderr:\n%s\n", truncate(stderr, 2000))
+		}
+		store.AddSearch("run_script", label, nil)
+		store.SetSearchNote("run_script", label, strings.TrimRight(note.String(), "\n"))
+
 	default:
 		recordGeneric(store, c, res)
 	}
