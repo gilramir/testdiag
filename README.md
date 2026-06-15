@@ -119,9 +119,9 @@ Given a Jenkins build URL:
 
 You can assign a **different LLM to every stage** (see [Setup](#setup)): a cheap
 model can parse the log, generate hypotheses, summarize results, and distill memory,
-while a stronger model does the source tracing. PLANINSPECTION defaults to the
-deepinspect LLM when not explicitly assigned; all other optional stages (including
-MEMORIZE) default to the logparse LLM.
+while a stronger model does the source tracing. PLANINSPECTION and SETGOALS default
+to the deepinspect LLM when not explicitly assigned; all other optional stages
+(including MEMORIZE) default to the logparse LLM.
 
 Each test is diagnosed independently — its own agents, no shared memory. Tests are
 run sequentially so the output and the `run_script` approval prompts stay coherent
@@ -159,8 +159,8 @@ defaults. All paths are workspace-relative.
 
 The two log tools are not advertised to PLANINSPECTION or DEEPINSPECT and are
 hard-disabled while either runs, so neither can re-read the raw log — both work from
-the brief. All other stages (LOGPARSE, HYPOTHESIZE, FEEDBACK, SUMMARIZE, LESSONS,
-MEMORIZE) use no tools; their inputs are given inline.
+the brief. All other stages (LOGPARSE, HYPOTHESIZE, FEEDBACK, SETGOALS, SUMMARIZE,
+LESSONS, MEMORIZE) use no tools; their inputs are given inline.
 
 **Tool logs** — after each PLANINSPECTION and DEEPINSPECT hypothesis run, testdiag
 writes a compact tool-call log to
@@ -235,9 +235,9 @@ deepinspect = "deep"   # gets the brief + plan + source tools, finds the root ca
 # summarize_feedback       = "fast"
 ```
 
-The two required stages are `logparse` and `deepinspect`. PLANINSPECTION defaults to
-the deepinspect LLM; LESSONS, MEMORIZE, and all other optional stages fall back to
-the logparse LLM when not explicitly assigned.
+The two required stages are `logparse` and `deepinspect`. PLANINSPECTION and SETGOALS
+default to the deepinspect LLM; LESSONS, MEMORIZE, and all other optional stages fall
+back to the logparse LLM when not explicitly assigned.
 
 ### Architecture document
 
