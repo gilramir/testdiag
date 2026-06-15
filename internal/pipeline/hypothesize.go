@@ -192,7 +192,7 @@ func buildHypothesizeSystemPrompt(m failmode.Mode) string {
 
 %s
 
-Your job is to generate a short ranked list of 1–5 hypotheses about what specific system behavior could have caused this failure. %s
+Your job is to generate a short ranked list of 1–3 hypotheses about what specific system behavior could have caused this failure. %s
 
 Each hypothesis must:
 - Name a specific component, code path, or interaction described in the architecture document (if provided) or implied by the brief.

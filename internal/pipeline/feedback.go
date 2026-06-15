@@ -97,7 +97,7 @@ func buildHypothesizeFeedbackPrompt(m failmode.Mode) string {
 	return fmt.Sprintf(`You are a hypothesis reviewer. You will be shown a list of hypotheses produced by a systems-analysis stage about why a %s failed. Assess whether the hypotheses are actionable.
 
 A good hypothesis list must satisfy ALL FIVE criteria:
-1. Contains at least one hypothesis (1–5 is ideal; more than 7 is too many).
+1. Contains at least one hypothesis (1–3 is ideal; more than 5 is too many).
 2. Each hypothesis names a specific system component or code path and ties it to evidence in the investigation brief.
 3. Each hypothesis %s.
 4. Each hypothesis includes a "Key symbols" line listing specific file:class.function identifiers whose implementation would confirm or refute it.

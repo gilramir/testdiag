@@ -82,7 +82,7 @@ const lessonsSystemPrompt = `You are reviewing the performance of testdiag, an a
   DOWNLOAD → LOGPARSE → HYPOTHESIZE → PLANINSPECTION × N → DEEPINSPECT × N → SUMMARIZE → LESSONS
 
 - LOGPARSE: reads the raw failure log and writes a structured investigation brief
-- HYPOTHESIZE: produces 1–5 ranked hypotheses about the nondeterministic condition from the brief + architecture doc
+- HYPOTHESIZE: produces 1–3 ranked hypotheses about the nondeterministic condition from the brief + architecture doc
 - PLANINSPECTION: one tool-using agent per hypothesis; breadth-first workspace survey producing a prioritized file list for DEEPINSPECT
 - DEEPINSPECT: one tool-using agent per hypothesis; inspects source files to confirm, refute, or leave inconclusive each hypothesis
 - SUMMARIZE: summarizes each hypothesis's inspection result (or notes that none is available) and identifies the most likely root cause
