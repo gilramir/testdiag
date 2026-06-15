@@ -1,4 +1,7 @@
-package llmproxy
+// Package stdin is the single reader of os.Stdin. It muxes incoming lines
+// between run_script confirmation prompts and operator-interrupt messages for
+// the tool-using inspection stages (PLANINSPECTION, DEEPINSPECT).
+package stdin
 
 import (
 	"bufio"
@@ -7,16 +10,17 @@ import (
 	"sync"
 )
 
-// InterruptController lets an operator inject messages into DEEPINSPECT's LLM
-// conversation mid-run. It is also the sole reader of os.Stdin, routing lines
-// to run_script's confirmation prompt when one is active and to the interrupt
-// channel otherwise — ensuring only one goroutine ever calls read(2) on stdin.
+// InterruptController lets an operator inject guidance into a running
+// DEEPINSPECT or PLANINSPECTION run. It is also the sole reader of os.Stdin,
+// routing lines to run_script's confirmation prompt when one is active and to
+// the interrupt channel otherwise — ensuring only one goroutine ever calls
+// read(2) on stdin.
 //
 // Usage:
-//  1. Call NewInterruptController then WatchStdin once at program startup.
+//  1. Call New then WatchStdin once at program startup.
 //  2. Pass ic.ConfirmLine to tools.SetStdinReader so run_script uses this
 //     controller instead of reading os.Stdin directly.
-//  3. Pass ic via Options.Interrupt to the DEEPINSPECT proxy (only).
+//  3. Pass ic to the inspect.Engine via Options.Interrupt for DEEPINSPECT.
 //  4. Pass ic.Drain to the Diagnoser so stale messages are discarded between
 //     hypothesis runs.
 type InterruptController struct {
@@ -26,12 +30,11 @@ type InterruptController struct {
 
 	mu      sync.Mutex
 	confirm bool     // true while run_script is waiting for a response
-	sticky  []string // operator notes accumulated during the current DEEPINSPECT run
+	sticky  []string // operator notes accumulated during the current inspection run
 }
 
-// NewInterruptController allocates the controller. Call WatchStdin to start
-// the stdin reader.
-func NewInterruptController() *InterruptController {
+// New allocates the controller. Call WatchStdin to start the stdin reader.
+func New() *InterruptController {
 	return &InterruptController{
 		interruptCh: make(chan string, 4),
 		confirmCh:   make(chan string, 1),
@@ -125,8 +128,8 @@ func (ic *InterruptController) Drain() {
 	}
 }
 
-// AddStickyNote records an operator message so the proxy can re-inject it into
-// every subsequent LLM request in this DEEPINSPECT run.
+// AddStickyNote records an operator message to re-inject into every subsequent
+// LLM request in this inspection run.
 func (ic *InterruptController) AddStickyNote(note string) {
 	ic.mu.Lock()
 	ic.sticky = append(ic.sticky, note)

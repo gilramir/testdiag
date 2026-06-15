@@ -81,8 +81,6 @@ max_tokens     = 4096
 #   deepinspect_feedback    — checks each DEEPINSPECT result (-> deepinspect)
 #   summarize_feedback      — checks the SUMMARIZE output (-> summarize)
 #
-# Stages that share the same endpoint and tool set reuse one proxy instance, so
-# pointing multiple optional stages at "fast" costs nothing extra.
 # ---------------------------------------------------------------------------
 
 [stages]
@@ -100,21 +98,6 @@ deepinspect = "deep"
 # setgoals_feedback       = "fast"
 # deepinspect_feedback    = "fast"
 # summarize_feedback      = "fast"
-
-[proxy]
-# Tool-call protocol normalization. Different open models (GPT-OSS, Gemma,
-# Mistral, Nemotron, Llama 3.x) emit tool calls in their own native syntax;
-# the proxy rewrites them into the form the agent parses and advertises the
-# workspace tools to the model.
-# Leave on unless your model already emits a recognized format
-# (normalize_tool_calls=false) or your server rejects a tools array
-# (inject_tools=false). DEEPINSPECT is advertised only the SOURCE tools; the
-# raw-log tools are withheld so it works from the brief.
-#   env: TESTDIAG_PROXY_NORMALIZE_TOOL_CALLS, TESTDIAG_PROXY_INJECT_TOOLS,
-#        TESTDIAG_PROXY_DEBUG
-normalize_tool_calls = true
-inject_tools         = true
-debug                = false   # also toggled by the --debug CLI flag
 
 [workspace]
 # The local checkout the Jenkins build ran against. Defaults to the current

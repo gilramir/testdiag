@@ -20,7 +20,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sort"
 	"strings"
 	"syscall"
 
@@ -30,9 +29,9 @@ import (
 	"github.com/gilramir/testdiag/internal/distill"
 	"github.com/gilramir/testdiag/internal/failmode"
 	"github.com/gilramir/testdiag/internal/jenkins"
-	"github.com/gilramir/testdiag/internal/llmproxy"
 	"github.com/gilramir/testdiag/internal/pipeline"
 	"github.com/gilramir/testdiag/internal/report"
+	"github.com/gilramir/testdiag/internal/stdin"
 	"github.com/gilramir/testdiag/internal/tools"
 	"github.com/gilramir/testdiag/internal/workspace"
 )
@@ -116,9 +115,6 @@ func run(opts *options) error {
 	if opts.Output != "" {
 		cfg.Output.Dir = opts.Output
 	}
-	if opts.Debug {
-		cfg.Proxy.Debug = true
-	}
 
 	ws, err := workspace.New(cfg.Workspace.Root)
 	if err != nil {
@@ -131,7 +127,7 @@ func run(opts *options) error {
 	// Register the workspace file tools once. Exclude the output directory from
 	// tree searches so the agent never reads its own generated reports.
 	tools.SetVerbose(opts.Verbose)
-	tools.SetDebug(cfg.Proxy.Debug)
+	tools.SetDebug(opts.Debug)
 	tools.ExcludeDir(filepath.Base(cfg.Output.Dir))
 	toolNames := tools.Register(ws)
 
@@ -164,40 +160,10 @@ func run(opts *options) error {
 	summarizeFBLLM := fallbackLLM(cfg, config.StageSummarizeFeedback, summarizeLLM)
 
 	// The interrupt controller is the sole reader of os.Stdin. It muxes lines
-	// between run_script confirmation prompts and DEEPINSPECT operator chat.
-	ic := llmproxy.NewInterruptController()
+	// between run_script confirmation prompts and operator-interrupt messages.
+	ic := stdin.New()
 	ic.WatchStdin()
 	tools.SetStdinReader(ic.ConfirmLine)
-
-	// Front each LLM with the in-process normalizing proxy. Stages sharing the
-	// same (endpoint, tool set) reuse one proxy instance.
-	// The tool-using stages (PLANINSPECTION, DEEPINSPECT) no longer go through
-	// the proxy: internal/inspect drives their tool loop itself, talking to the
-	// model server directly and doing its own tool-injection and tool-call
-	// normalization. Only the tool-less stages are fronted.
-	pm := newProxyManager(cfg.Proxy, opts.Verbose, ic)
-	defer pm.Close()
-	if pm.enabled() {
-		// Tool-less stages share a proxy when they use the same endpoint.
-		for stageName, llmPtr := range map[string]*config.LLMSpec{
-			"logparse":                &logparseLLM,
-			"logparse_feedback":       &logparseFBLLM,
-			"hypothesize":             &hypothesizeLLM,
-			"hypothesize_feedback":    &hypothesizeFBLLM,
-			"planinspection_feedback": &planFBLLM,
-			"setgoals":                &setgoalsLLM,
-			"setgoals_feedback":       &setgoalsFBLLM,
-			"deepinspect_feedback":    &deepinspectFBLLM,
-			"summarize":               &summarizeLLM,
-			"summarize_feedback":      &summarizeFBLLM,
-			"lessons":                 &lessonsLLM,
-			"memorize":                &memorizeLLM,
-		} {
-			if *llmPtr, err = pm.front(stageName, *llmPtr, nil); err != nil {
-				return err
-			}
-		}
-	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -231,18 +197,16 @@ func run(opts *options) error {
 			FeedbackLLM: hypothesizeFBLLM,
 		},
 		Plan: pipeline.StageSpec{
-			LLM:          planLLM,
-			FeedbackLLM:  planFBLLM,
-			ResetCounter: pm.resetFn("planinspection"),
+			LLM:         planLLM,
+			FeedbackLLM: planFBLLM,
 		},
 		SetGoals: pipeline.StageSpec{
 			LLM:         setgoalsLLM,
 			FeedbackLLM: setgoalsFBLLM,
 		},
 		DeepInspect: pipeline.StageSpec{
-			LLM:          deepinspectLLM,
-			FeedbackLLM:  deepinspectFBLLM,
-			ResetCounter: pm.resetFn("deepinspect"),
+			LLM:         deepinspectLLM,
+			FeedbackLLM: deepinspectFBLLM,
 		},
 		Summarize: pipeline.StageSpec{
 			LLM:         summarizeLLM,
@@ -340,90 +304,6 @@ func process(ctx context.Context, pl *pipeline.Pipeline, d *distill.Distiller, f
 		return fmt.Errorf("%d test(s) could not be diagnosed", failed)
 	}
 	return nil
-}
-
-// proxyManager starts at most one normalizing LLM proxy per distinct
-// (endpoint, advertised tool set) and rewrites each stage LLM's BaseURL.
-type proxyManager struct {
-	cfg       config.Proxy
-	verbose   bool
-	interrupt *llmproxy.InterruptController
-	byKey     map[string]*llmproxy.Proxy
-	byStage   map[string]*llmproxy.Proxy // stage name → proxy (for resetFn)
-	proxies   []*llmproxy.Proxy
-}
-
-func newProxyManager(cfg config.Proxy, verbose bool, ic *llmproxy.InterruptController) *proxyManager {
-	return &proxyManager{
-		cfg:       cfg,
-		verbose:   verbose,
-		interrupt: ic,
-		byKey:     map[string]*llmproxy.Proxy{},
-		byStage:   map[string]*llmproxy.Proxy{},
-	}
-}
-
-// resetFn returns a function that resets the request counter on the proxy
-// serving the given stage. Returns a no-op if the proxy is unknown (e.g.
-// when the proxy is disabled).
-func (m *proxyManager) resetFn(stage string) func() {
-	if px, ok := m.byStage[stage]; ok {
-		return px.ResetCounter
-	}
-	return func() {}
-}
-
-func (m *proxyManager) enabled() bool {
-	return m.cfg.NormalizeToolCalls || m.cfg.Debug || m.verbose
-}
-
-func (m *proxyManager) front(stage string, spec config.LLMSpec, proxyTools []llmproxy.Tool) (config.LLMSpec, error) {
-	key := spec.BaseURL + "\x00" + toolSig(proxyTools)
-	// DEEPINSPECT has interrupt support; ensure it never shares a proxy with
-	// another tool-using stage (e.g. PLANINSPECTION) even on the same endpoint.
-	if stage == "deepinspect" {
-		key += "\x00interrupt"
-	}
-	px, ok := m.byKey[key]
-	if !ok {
-		var ic *llmproxy.InterruptController
-		if stage == "deepinspect" {
-			ic = m.interrupt
-		}
-		p, err := llmproxy.Start(spec.BaseURL, llmproxy.Options{
-			Tools:     proxyTools,
-			Normalize: m.cfg.NormalizeToolCalls,
-			Debug:     m.cfg.Debug,
-			Verbose:   m.verbose,
-			Interrupt: ic,
-		})
-		if err != nil {
-			return spec, fmt.Errorf("starting LLM proxy for %s: %w", stage, err)
-		}
-		m.byKey[key] = p
-		m.proxies = append(m.proxies, p)
-		px = p
-		fmt.Printf("LLM proxy active: %s -> %s (normalize=%t, tools=%d, debug=%t)\n",
-			px.BaseURL(), spec.BaseURL, m.cfg.NormalizeToolCalls, len(proxyTools), m.cfg.Debug)
-	}
-	m.byStage[stage] = px
-	spec.BaseURL = px.BaseURL()
-	return spec, nil
-}
-
-func (m *proxyManager) Close() {
-	for _, p := range m.proxies {
-		p.Close()
-	}
-}
-
-func toolSig(ts []llmproxy.Tool) string {
-	names := make([]string, 0, len(ts))
-	for _, t := range ts {
-		names = append(names, t.Name)
-	}
-	sort.Strings(names)
-	return strings.Join(names, ",")
 }
 
 func filterTests(failures []jenkins.FailedTest, substrings []string) []jenkins.FailedTest {

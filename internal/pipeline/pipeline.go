@@ -156,14 +156,9 @@ type Stage interface {
 
 // StageSpec pairs a primary LLM with the LLM used for its FEEDBACK gate.
 // FeedbackLLM may equal LLM when no explicit override is configured.
-// ResetCounter, if non-nil, is called at the start of each agent run to reset
-// the proxy's per-run request counter (so [llm] heartbeats show #1, #2, …
-// within each hypothesis rather than a monotone total). Only meaningful for
-// tool-using stages (PLANINSPECTION, DEEPINSPECT).
 type StageSpec struct {
-	LLM          config.LLMSpec
-	FeedbackLLM  config.LLMSpec
-	ResetCounter func()
+	LLM         config.LLMSpec
+	FeedbackLLM config.LLMSpec
 }
 
 // PipelineSpec names the LLMs for every stage. The feedbacks for each stage
@@ -251,9 +246,9 @@ func New(cfg *config.Config, ws *workspace.Workspace, spec PipelineSpec, mode fa
 			&downloadStage{ws: ws, verbose: verbose},
 			newLogParseStage(ws, spec.LogParse.LLM, mode, lpFB, sc.LogParseMaxFeedbacks, verbose, pauseFn),
 			newHypothesizeStage(ws, spec.Hypothesize.LLM, mode, archDoc, memory, hFB, sc.HypothesizeMaxFeedbacks, verbose, pauseFn),
-			newPlanInspectAllStage(plnr, ws, archDoc, planFB, sc.PlanMaxFeedbacks, spec.Plan.ResetCounter, verbose, pauseFn),
+			newPlanInspectAllStage(plnr, ws, archDoc, planFB, sc.PlanMaxFeedbacks, verbose, pauseFn),
 			newSetGoalsAllStage(ws, spec.SetGoals.LLM, sgFB, sc.SetGoalsMaxFeedbacks, verbose, pauseFn),
-			newDeepInspectAllStage(diagnoser, ws, diFB, sc.DeepInspectMaxFeedbacks, spec.DeepInspect.ResetCounter, verbose, pauseFn),
+			newDeepInspectAllStage(diagnoser, ws, diFB, sc.DeepInspectMaxFeedbacks, verbose, pauseFn),
 			newSummarizeStage(ws, spec.Summarize.LLM, cFB, sc.SummarizeMaxFeedbacks, verbose, pauseFn),
 			newLessonsStage(ws, spec.Lessons.LLM, archDoc, verbose, pauseFn),
 		},

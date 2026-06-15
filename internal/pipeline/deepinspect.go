@@ -21,13 +21,12 @@ type deepInspectAllStage struct {
 	ws           *workspace.Workspace
 	feedback     *feedbackChecker // nil when DEEPINSPECT feedback is disabled
 	maxFeedbacks int
-	resetCounter func() // resets the proxy's per-run request counter; may be nil
 	verbose      bool
 	pauseFn      func() // non-nil when -p is set; called after each handoff print
 }
 
-func newDeepInspectAllStage(d *diagnose.Diagnoser, ws *workspace.Workspace, fb *feedbackChecker, maxFeedbacks int, resetCounter func(), verbose bool, pauseFn func()) *deepInspectAllStage {
-	return &deepInspectAllStage{d: d, ws: ws, feedback: fb, maxFeedbacks: maxFeedbacks, resetCounter: resetCounter, verbose: verbose, pauseFn: pauseFn}
+func newDeepInspectAllStage(d *diagnose.Diagnoser, ws *workspace.Workspace, fb *feedbackChecker, maxFeedbacks int, verbose bool, pauseFn func()) *deepInspectAllStage {
+	return &deepInspectAllStage{d: d, ws: ws, feedback: fb, maxFeedbacks: maxFeedbacks, verbose: verbose, pauseFn: pauseFn}
 }
 
 func (s *deepInspectAllStage) Name() State { return StateDeepInspect }
@@ -63,10 +62,6 @@ func (s *deepInspectAllStage) Run(ctx context.Context, sc *Context) error {
 // returns an error; failures are captured in the returned outcome.
 func (s *deepInspectAllStage) runOne(ctx context.Context, sc *Context, h Hypothesis, planContent, goalsContent string) DeepInspectOutcome {
 	out := DeepInspectOutcome{Hypothesis: h}
-
-	if s.resetCounter != nil {
-		s.resetCounter()
-	}
 
 	if s.verbose || s.pauseFn != nil {
 		fmt.Fprintf(os.Stdout, "--- handoff to DEEPINSPECT h%d/%d for %s ---\n%s\n--- end ---\n\n",

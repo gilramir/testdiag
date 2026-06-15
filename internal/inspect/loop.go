@@ -13,9 +13,9 @@ import (
 )
 
 // Interrupter lets an operator inject guidance into a running investigation. It
-// is satisfied by *llmproxy.InterruptController; declared here as an interface
-// so this package does not import llmproxy. Sticky notes are re-injected into
-// the system prompt every turn so guidance persists for the rest of the run.
+// is satisfied by *stdin.InterruptController; declared here as an interface so
+// this package does not import stdin. Sticky notes are re-injected into the
+// system prompt every turn so guidance persists for the rest of the run.
 type Interrupter interface {
 	TakeNonBlocking() (string, bool)
 	ReadLine(ctx context.Context) (string, bool)
@@ -44,8 +44,8 @@ type Engine struct {
 	interrupt Interrupter
 }
 
-// NewEngine builds an Engine that talks to the given LLM directly (not through
-// the llmproxy). Schemas are the tools advertised to the model, e.g.
+// NewEngine builds an Engine that talks to the given LLM directly. Schemas are
+// the tools advertised to the model, e.g.
 // tools.SchemasExcluding(append(LogToolNames, "notebook")...).
 func NewEngine(llm config.LLMSpec, opts Options) *Engine {
 	return newEngineWithClient(newHTTPClient(llm), opts)

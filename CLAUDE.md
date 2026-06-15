@@ -31,7 +31,7 @@ SUMMARIZE → FEEDBACK → LESSONS
 
 Each stage hands off to the next through a Markdown file on disk (`.testdiag/handoff/`) and each LLM can be configured independently. Different LLMs can be assigned to different stages so a cheap model can parse the log while a stronger one does the source tracing.
 
-**LLM calls are all ours.** There is no agent framework: every LLM call goes through the small OpenAI-compatible client in `internal/inspect` (`client.go`). The tool-less stages (LOGPARSE, HYPOTHESIZE, SUMMARIZE, LESSONS, MEMORIZE, and every FEEDBACK gate) make a single `inspect.Complete(system, user)` call. The two **tool-using** stages (PLANINSPECTION, DEEPINSPECT) run the full `inspect.Engine` loop, which accumulates results into a deduplicated **fact tree** (`internal/knowledge`) re-rendered into the context every turn. This design keeps the deep agent's working memory intact: it deliberately avoids a naive continuation loop that would keep only the single most recent tool result, drop the original user message after the first tool call, and nudge the model to stop calling tools. There is no agent-framework dependency in `go.mod`. The `internal/llmproxy` reverse proxy still optionally fronts the tool-less stages (for `--debug` conversation logging); the tool-using stages bypass it. See the `internal/inspect`, `internal/knowledge`, and `internal/llmproxy` notes below.
+**LLM calls are all ours.** There is no agent framework: every LLM call goes through the small OpenAI-compatible client in `internal/inspect` (`client.go`). The tool-less stages (LOGPARSE, HYPOTHESIZE, SUMMARIZE, LESSONS, MEMORIZE, and every FEEDBACK gate) make a single `inspect.Complete(system, user)` call, which logs the full conversation to stderr under `--debug` and one-line heartbeats under `-v`. The two **tool-using** stages (PLANINSPECTION, DEEPINSPECT) run the full `inspect.Engine` loop, which accumulates results into a deduplicated **fact tree** (`internal/knowledge`) re-rendered into the context every turn. This design keeps the deep agent's working memory intact: it deliberately avoids a naive continuation loop that would keep only the single most recent tool result, drop the original user message after the first tool call, and nudge the model to stop calling tools. There is no agent-framework dependency in `go.mod`. See the `internal/inspect` and `internal/knowledge` notes below.
 
 See `README.md` for the user-facing description and `plan.txt` for the original design notes.
 
@@ -58,12 +58,8 @@ The pipeline is sequential: fetch failures → run each failure through the stag
   all flags and positionals, sets `Command.Function` to `run(*options)`, and calls
   `ap.ParseAndExit()`. `ParseAndExit` owns `-h`, parse errors, and function errors
   so nothing calls `os.Exit` directly. `run()` handles config load, resolving the LLM
-  for each stage (`cfg.LLMForStage` / `cfg.LLMForStageOptional`), starting the
-  per-stage LLM proxies (a `proxyManager` runs at most one proxy per distinct
-  `(endpoint, advertised tool set)` and repoints each LLM's `BaseURL`) **for the
-  tool-less stages only** — PLANINSPECTION and DEEPINSPECT are no longer fronted
-  by the proxy (the `internal/inspect` engine talks to the model server directly),
-  and `process()`, which runs each failure through the `pipeline` one at a time in order.
+  for each stage (`cfg.LLMForStage` / `cfg.LLMForStageOptional`), and `process()`,
+  which runs each failure through the `pipeline` one at a time in order.
   LLMs for optional stages (HYPOTHESIZE, SUMMARIZE, LESSONS, and all feedback stages)
   fall back to the logparse LLM when not explicitly configured. Each failed test is fully
   independent (no shared agent state); sequential execution keeps output and
@@ -242,14 +238,13 @@ The pipeline is sequential: fetch failures → run each failure through the stag
   memory, so the engine does NOT keep a growing message array (this deliberately
   avoids a naive continuation loop that would keep only the latest tool result, drop
   the original user message, and discourage further tool calls). `client.go` is a
-  small OpenAI `/chat/completions` client talking to the model server directly (no
-  proxy); structured `tool_calls` are folded into the text via `toolproto.FromStructured`.
-  Operator-interrupt support is reimplemented here via the `Interrupter` interface
-  (satisfied by `*llmproxy.InterruptController`): a queued message becomes a sticky
-  note re-injected into the system prompt every turn. Under `-v` the engine prints the
-  fact tree before each round; under `--debug` it also prints the raw LLM response
-  (it reads `tools.VerboseEnabled()`/`DebugEnabled()` since these stages bypass the
-  proxy that used to dump the conversation).
+  small OpenAI `/chat/completions` client talking to the model server directly;
+  structured `tool_calls` are folded into the text via `toolproto.FromStructured`.
+  Operator-interrupt support is via the `Interrupter` interface (satisfied by
+  `*stdin.InterruptController`): a queued message becomes a sticky note re-injected
+  into the system prompt every turn. Under `-v` the engine prints the fact tree before
+  each round; under `--debug` it also prints the raw LLM response (reads
+  `tools.VerboseEnabled()`/`DebugEnabled()`).
 
 - **`internal/knowledge`** — the **fact tree** the inspect engine accumulates. Two
   record kinds: per-file records storing a sparse `line→text` map so repeated or
@@ -302,18 +297,12 @@ The pipeline is sequential: fetch failures → run each failure through the stag
   `TOOL_CALL{…}`) — that is the entry point the `internal/inspect` engine uses to
   read the model's tool intent. Pure functions; well covered by tests.
 
-- **`internal/llmproxy`** — an in-process reverse proxy that can front an LLM
-  endpoint, injecting the workspace tools into a request and running the response
-  `content` (and any structured `tool_calls`) through `toolproto`. It was built to
-  compensate for an OpenAI client that does no native tool calling; now that the
-  `internal/inspect` engine does that itself, the proxy is **largely vestigial** —
-  `main.go` still repoints the tool-less
-  stages' `BaseURL` at it so `--debug` conversation logging keeps working, but the
-  tool-using stages bypass it (the `internal/inspect` engine does tool injection and
-  normalization itself). The still-useful `InterruptController` lives here: it is the
-  sole stdin reader (muxing `run_script` confirmations and operator-interrupt lines)
-  and is handed to the inspect engine via the `inspect.Interrupter` interface.
-  Retiring the proxy and relocating `InterruptController` is a planned cleanup.
+- **`internal/stdin`** — the sole reader of `os.Stdin`. `InterruptController`
+  muxes incoming lines between `run_script` confirmation prompts (via `ConfirmLine`,
+  passed to `tools.SetStdinReader`) and operator-interrupt messages for the
+  tool-using inspection stages. `main.go` passes it to `pipeline.New` as both
+  `interrupt` (handed to the `inspect.Engine` for DEEPINSPECT) and `drainFn`
+  (called between hypothesis runs to discard stale messages).
 
 ## Key conventions
 

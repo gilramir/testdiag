@@ -47,7 +47,6 @@ type Config struct {
 	Jenkins     Jenkins            `toml:"jenkins"`
 	LLMs        map[string]LLMSpec `toml:"llms"`   // named LLMs, referenced by stages
 	Stages      map[string]string  `toml:"stages"` // stage name -> LLM name
-	Proxy       Proxy              `toml:"proxy"`
 	Workspace   Workspace          `toml:"workspace"`
 	Output      Output             `toml:"output"`
 	StageConfig StageConfig        `toml:"stage_config"`
@@ -72,24 +71,6 @@ type LLMSpec struct {
 	ContextWindow int     `toml:"context_window"` // model context size in tokens (0 = unknown)
 	Temperature   float32 `toml:"temperature"`    // sampling temperature
 	MaxTokens     int     `toml:"max_tokens"`     // max tokens per completion
-}
-
-// Proxy configures the in-process normalizing reverse proxy that fronts each
-// LLM endpoint. These knobs are global because they apply identically to every
-// endpoint the stages talk to.
-type Proxy struct {
-	// NormalizeToolCalls runs requests through an in-process proxy that rewrites
-	// each model's native tool-call syntax (GPT-OSS/Gemma/Mistral/Nemotron) into
-	// the canonical TOOL_CALL form. On by default; harmless if the model already
-	// uses a recognized format. Disable for a model that needs no translation.
-	NormalizeToolCalls bool `toml:"normalize_tool_calls"`
-	// InjectTools makes that proxy add a `tools` array to each request so
-	// tool-aware chat templates advertise the tools to the model. On by default;
-	// disable if a server rejects requests that carry tools.
-	InjectTools bool `toml:"inject_tools"`
-	// Debug logs the full request/response conversation with the LLM to stderr.
-	// Off by default; the --debug CLI flag also turns it on.
-	Debug bool `toml:"debug"`
 }
 
 // Workspace describes the local checkout the failing tests came from. The
@@ -318,10 +299,6 @@ func loadIfExists(path string, cfg *Config) error {
 
 func defaults() *Config {
 	return &Config{
-		Proxy: Proxy{
-			NormalizeToolCalls: true,
-			InjectTools:        true,
-		},
 		Output: Output{
 			Dir: "test-diagnosis",
 		},
@@ -371,10 +348,6 @@ func applyEnvOverrides(cfg *Config) {
 		setStr(&spec.Model, prefix+"MODEL")
 		cfg.LLMs[name] = spec
 	}
-
-	setBool(&cfg.Proxy.NormalizeToolCalls, "TESTDIAG_PROXY_NORMALIZE_TOOL_CALLS")
-	setBool(&cfg.Proxy.InjectTools, "TESTDIAG_PROXY_INJECT_TOOLS")
-	setBool(&cfg.Proxy.Debug, "TESTDIAG_PROXY_DEBUG")
 
 	setStr(&cfg.Workspace.Root, "TESTDIAG_WORKSPACE_ROOT")
 	setStr(&cfg.Workspace.ArchitectureDoc, "TESTDIAG_ARCHITECTURE_DOC")

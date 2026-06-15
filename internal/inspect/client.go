@@ -18,13 +18,19 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gilramir/testdiag/internal/config"
 	"github.com/gilramir/testdiag/internal/toolproto"
 	"github.com/gilramir/testdiag/internal/tools"
 )
+
+// completeMu serializes debug output from concurrent Complete calls so each
+// request/response block stays intact in the log.
+var completeMu sync.Mutex
 
 // Client sends a two-message (system + user) chat completion and returns the
 // assistant's text content. Any structured tool_calls the server returns are
@@ -54,8 +60,37 @@ func newHTTPClient(llm config.LLMSpec) *httpClient {
 // the tool-less stages (LOGPARSE, HYPOTHESIZE, SUMMARIZE, LESSONS, FEEDBACK, and
 // MEMORIZE), each of which needs a single chat completion with no tools and no
 // memory — exactly this call.
+//
+// Under -v it logs a one-line request and response heartbeat. Under --debug it
+// logs the full system and user messages and the complete assistant reply.
 func Complete(ctx context.Context, llm config.LLMSpec, system, user string) (string, error) {
-	return newHTTPClient(llm).Chat(ctx, system, user, nil)
+	debug := tools.DebugEnabled()
+	verbose := tools.VerboseEnabled()
+	if debug {
+		completeMu.Lock()
+		fmt.Fprintf(os.Stderr, "\n========== LLM request (tool-less, %s) ==========\n", llm.Model)
+		fmt.Fprintf(os.Stderr, "--- SYSTEM ---\n%s\n", system)
+		fmt.Fprintf(os.Stderr, "--- USER ---\n%s\n", user)
+		completeMu.Unlock()
+	} else if verbose {
+		fmt.Fprintf(os.Stderr, "[llm %s] -> tool-less: system(%dc) user(%dc)\n",
+			llm.Model, len(system), len(user))
+	}
+
+	content, err := newHTTPClient(llm).Chat(ctx, system, user, nil)
+	if err != nil {
+		return "", err
+	}
+
+	if debug {
+		completeMu.Lock()
+		fmt.Fprintf(os.Stderr, "---------- LLM response ----------\n%s\n%s\n",
+			strings.TrimSpace(content), strings.Repeat("=", 40))
+		completeMu.Unlock()
+	} else if verbose {
+		fmt.Fprintf(os.Stderr, "[llm %s] <- text reply (%dc)\n", llm.Model, len(content))
+	}
+	return content, nil
 }
 
 func (c *httpClient) Chat(ctx context.Context, system, user string, schemas []tools.Schema) (string, error) {
