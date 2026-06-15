@@ -122,7 +122,7 @@ func run(opts *options) error {
 	}
 
 	background := readBackground(ws.Root())
-	memory := readMemory(ws.Root())
+	memoryFn := func() string { return readMemory(ws.Root()) }
 
 	// Register the workspace file tools once. Exclude the output directory from
 	// tree searches so the agent never reads its own generated reports.
@@ -225,7 +225,7 @@ func run(opts *options) error {
 		}
 	}
 	mode := failmode.Mode{AlwaysFails: opts.AlwaysFails}
-	pl := pipeline.New(cfg, ws, spec, mode, background, memory, opts.Verbose, ic, ic.Drain, pauseFn)
+	pl := pipeline.New(cfg, ws, spec, mode, background, memoryFn, opts.Verbose, ic, ic.Drain, pauseFn)
 	distiller := distill.New(ws, memorizeLLM)
 
 	fmt.Printf("Found %d failed test(s). Workspace: %s\n", len(failures), ws.Root())
@@ -252,8 +252,8 @@ func run(opts *options) error {
 		lessonsLLM.BaseURL, lessonsLLM.Model)
 	fmt.Printf("  MEMORIZE    -> %s (model %s)\n",
 		memorizeLLM.BaseURL, memorizeLLM.Model)
-	if memory != "" {
-		fmt.Printf("  memory: %d byte(s) of prior codebase knowledge loaded\n", len(memory))
+	if m := memoryFn(); m != "" {
+		fmt.Printf("  memory: %d byte(s) of prior codebase knowledge loaded\n", len(m))
 	}
 	fmt.Printf("Diagnosing one at a time; reports -> %s\n\n", cfg.Output.Dir)
 

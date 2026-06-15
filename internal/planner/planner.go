@@ -44,16 +44,17 @@ type Planner struct {
 	ws         *workspace.Workspace
 	engine     *inspect.Engine
 	background string
-	memory     string // contents of .testdiag/memory.md (may be empty)
+	memoryFn   func() string // returns current .testdiag/memory.md contents
 	mapper     string
 }
 
 // New creates a Planner. background is the contents of TEST_AGENT.md (may be
-// empty); memory is the contents of .testdiag/memory.md (may be empty);
-// mapper is the optional path to the test→source mapping executable.
-// maxToolIterations caps the tool loop; maxChars caps the accumulated knowledge
-// rendered into the context each turn.
-func New(ws *workspace.Workspace, llm config.LLMSpec, background, memory string, maxToolIterations, maxChars int, mapper string) *Planner {
+// empty); memoryFn returns the current contents of .testdiag/memory.md and is
+// called at the start of each Plan call so new memories written during a run
+// are visible to later diagnoses; mapper is the optional path to the
+// test→source mapping executable. maxToolIterations caps the tool loop;
+// maxChars caps the accumulated knowledge rendered into the context each turn.
+func New(ws *workspace.Workspace, llm config.LLMSpec, background string, memoryFn func() string, maxToolIterations, maxChars int, mapper string) *Planner {
 	// PLAN surveys source files; it never needs the raw log or the notebook.
 	exclude := append(append([]string{}, tools.LogToolNames...), "notebook")
 	engine := inspect.NewEngine(llm, inspect.Options{
@@ -61,7 +62,7 @@ func New(ws *workspace.Workspace, llm config.LLMSpec, background, memory string,
 		MaxChars:      maxChars,
 		Schemas:       tools.SchemasExcluding(exclude...),
 	})
-	return &Planner{ws: ws, engine: engine, background: background, memory: memory, mapper: mapper}
+	return &Planner{ws: ws, engine: engine, background: background, memoryFn: memoryFn, mapper: mapper}
 }
 
 // Plan runs one PLAN attempt for one hypothesis. When input.PrevResult and
@@ -83,7 +84,7 @@ func (p *Planner) Plan(ctx context.Context, input PlanInput) (Result, error) {
 
 	r, err := p.engine.Run(ctx, inspect.RunInput{
 		System: buildSystemPrompt(input.Brief, input.Hypothesis),
-		Task:   buildUserPrompt(input, m, p.background, p.memory),
+		Task:   buildUserPrompt(input, m, p.background, p.memoryFn()),
 	})
 	if err != nil {
 		return Result{}, fmt.Errorf("plan agent run for %s: %w", input.Test.FullName(), err)

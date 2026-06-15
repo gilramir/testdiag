@@ -52,7 +52,7 @@ type Diagnoser struct {
 	llm               config.LLMSpec
 	mode              failmode.Mode // flaky (default) vs always-fails
 	background        string        // contents of TEST_AGENT.md
-	memory            string        // contents of .testdiag/memory.md (may be empty)
+	memoryFn          func() string // returns current .testdiag/memory.md contents
 	maxToolIterations int
 	maxChars          int
 	mapper            string              // path to test→source mapper executable; may be empty
@@ -63,16 +63,18 @@ type Diagnoser struct {
 // New creates a Diagnoser. llm is the LLM assigned to the DEEPINSPECT stage;
 // mode selects flaky vs always-fails framing;
 // background is the TEST_AGENT.md content (may be "");
-// memory is the contents of .testdiag/memory.md (may be "");
+// memoryFn returns the current contents of .testdiag/memory.md and is called
+// at the start of each Diagnose call so new memories written during a run are
+// visible to later diagnoses;
 // maxToolIterations caps the tool-calling loop per attempt;
 // maxChars caps the accumulated knowledge rendered into context each turn;
 // mapper is the optional path to the test→source mapping executable;
 // interrupt, if non-nil, lets an operator inject guidance mid-run;
 // drainFn, if non-nil, is called before each attempt to discard any queued
 // operator messages that arrived between hypothesis runs.
-func New(ws *workspace.Workspace, llm config.LLMSpec, mode failmode.Mode, background, memory string, maxToolIterations, maxChars int, mapper string, interrupt inspect.Interrupter, drainFn func()) *Diagnoser {
+func New(ws *workspace.Workspace, llm config.LLMSpec, mode failmode.Mode, background string, memoryFn func() string, maxToolIterations, maxChars int, mapper string, interrupt inspect.Interrupter, drainFn func()) *Diagnoser {
 	return &Diagnoser{
-		ws: ws, llm: llm, mode: mode, background: background, memory: memory,
+		ws: ws, llm: llm, mode: mode, background: background, memoryFn: memoryFn,
 		maxToolIterations: maxToolIterations, maxChars: maxChars, mapper: mapper,
 		interrupt: interrupt, drainFn: drainFn,
 	}
@@ -115,7 +117,7 @@ func (d *Diagnoser) Diagnose(ctx context.Context, input DiagnoseInput) (Result, 
 
 	r, err := engine.Run(ctx, inspect.RunInput{
 		System: buildSystemPrompt(d.mode, input.Brief, input.Hypothesis, input.Plan, input.Goals, m.SourceFile, d.maxToolIterations),
-		Task:   buildUserPrompt(input, d.background, d.memory),
+		Task:   buildUserPrompt(input, d.background, d.memoryFn()),
 	})
 	if err != nil {
 		return Result{}, fmt.Errorf("agent run for %s: %w", input.Test.FullName(), err)

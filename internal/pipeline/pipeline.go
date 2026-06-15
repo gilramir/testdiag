@@ -184,16 +184,18 @@ type Pipeline struct {
 // drainInterrupt, if non-nil, is called before each DEEPINSPECT attempt to
 // discard queued operator messages that arrived between hypothesis runs; it is
 // the InterruptController.Drain method wired in by main.
-// memory is the contents of .testdiag/memory.md from prior runs (may be "").
+// memoryFn returns the current contents of .testdiag/memory.md; it is called
+// at the start of each stage that uses it so diagnoses later in the same run
+// see memories written by earlier ones.
 // pauseFn, if non-nil, is called after every handoff print regardless of
 // verbose; it should print "Press <ENTER> to continue..." and block until the
 // user presses ENTER. When pauseFn is non-nil the handoff is printed even if
 // verbose is false.
-func New(cfg *config.Config, ws *workspace.Workspace, spec PipelineSpec, mode failmode.Mode, background, memory string, verbose bool, interrupt inspect.Interrupter, drainInterrupt func(), pauseFn func()) *Pipeline {
+func New(cfg *config.Config, ws *workspace.Workspace, spec PipelineSpec, mode failmode.Mode, background string, memoryFn func() string, verbose bool, interrupt inspect.Interrupter, drainInterrupt func(), pauseFn func()) *Pipeline {
 	sc := &cfg.StageConfig
 
-	plnr := planner.New(ws, spec.Plan.LLM, background, memory, sc.PlanMaxToolIterations, sc.InspectMaxKnowledgeChars, cfg.Workspace.Mapper)
-	diagnoser := diagnose.New(ws, spec.DeepInspect.LLM, mode, background, memory, sc.DeepInspectMaxToolIterations, sc.InspectMaxKnowledgeChars, cfg.Workspace.Mapper, interrupt, drainInterrupt)
+	plnr := planner.New(ws, spec.Plan.LLM, background, memoryFn, sc.PlanMaxToolIterations, sc.InspectMaxKnowledgeChars, cfg.Workspace.Mapper)
+	diagnoser := diagnose.New(ws, spec.DeepInspect.LLM, mode, background, memoryFn, sc.DeepInspectMaxToolIterations, sc.InspectMaxKnowledgeChars, cfg.Workspace.Mapper, interrupt, drainInterrupt)
 
 	// Build feedback checkers for each stage.
 	var lpFB, hFB, planFB, sgFB, diFB, cFB *feedbackChecker
@@ -245,7 +247,7 @@ func New(cfg *config.Config, ws *workspace.Workspace, spec PipelineSpec, mode fa
 		stages: []Stage{
 			&downloadStage{ws: ws, verbose: verbose},
 			newLogParseStage(ws, spec.LogParse.LLM, mode, lpFB, sc.LogParseMaxFeedbacks, verbose, pauseFn),
-			newHypothesizeStage(ws, spec.Hypothesize.LLM, mode, archDoc, memory, hFB, sc.HypothesizeMaxFeedbacks, verbose, pauseFn),
+			newHypothesizeStage(ws, spec.Hypothesize.LLM, mode, archDoc, memoryFn, hFB, sc.HypothesizeMaxFeedbacks, verbose, pauseFn),
 			newPlanInspectAllStage(plnr, ws, archDoc, planFB, sc.PlanMaxFeedbacks, verbose, pauseFn),
 			newSetGoalsAllStage(ws, spec.SetGoals.LLM, sgFB, sc.SetGoalsMaxFeedbacks, verbose, pauseFn),
 			newDeepInspectAllStage(diagnoser, ws, diFB, sc.DeepInspectMaxFeedbacks, verbose, pauseFn),

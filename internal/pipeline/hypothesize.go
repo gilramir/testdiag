@@ -25,16 +25,16 @@ type hypothesizeStage struct {
 	llm          config.LLMSpec
 	mode         failmode.Mode
 	archDocPath  string           // workspace-relative; may be empty
-	memory       string           // contents of .testdiag/memory.md (may be empty)
+	memoryFn     func() string    // returns current .testdiag/memory.md contents
 	feedback     *feedbackChecker // nil when disabled
 	maxFeedbacks int
 	verbose      bool
 	pauseFn      func() // non-nil when -p is set; called after each handoff print
 }
 
-func newHypothesizeStage(ws *workspace.Workspace, llm config.LLMSpec, mode failmode.Mode, archDocPath, memory string, fb *feedbackChecker, maxFeedbacks int, verbose bool, pauseFn func()) *hypothesizeStage {
+func newHypothesizeStage(ws *workspace.Workspace, llm config.LLMSpec, mode failmode.Mode, archDocPath string, memoryFn func() string, fb *feedbackChecker, maxFeedbacks int, verbose bool, pauseFn func()) *hypothesizeStage {
 	return &hypothesizeStage{
-		ws: ws, llm: llm, mode: mode, archDocPath: archDocPath, memory: memory,
+		ws: ws, llm: llm, mode: mode, archDocPath: archDocPath, memoryFn: memoryFn,
 		feedback: fb, maxFeedbacks: maxFeedbacks, verbose: verbose, pauseFn: pauseFn,
 	}
 }
@@ -51,10 +51,11 @@ func (s *hypothesizeStage) Run(ctx context.Context, sc *Context) error {
 	for feedbacks := 0; ; {
 		stageBanner(s.verbose, string(s.Name()), feedbacks+1)
 		var prompt string
+		memory := s.memoryFn()
 		if critique == "" {
-			prompt = buildHypothesizePrompt(sc.Test, sc.Brief, archDoc, s.memory)
+			prompt = buildHypothesizePrompt(sc.Test, sc.Brief, archDoc, memory)
 		} else {
-			prompt = buildHypothesizeRetryPrompt(sc.Test, sc.Brief, archDoc, s.memory, prevOutput, critique)
+			prompt = buildHypothesizeRetryPrompt(sc.Test, sc.Brief, archDoc, memory, prevOutput, critique)
 		}
 		raw, err := inspect.Complete(ctx, s.llm, buildHypothesizeSystemPrompt(s.mode), prompt)
 		if err != nil {
