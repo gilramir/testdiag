@@ -109,7 +109,7 @@ func (t *functionLookupTool) JSONSchema() map[string]interface{} {
 			"directories": map[string]interface{}{
 				"type":        "array",
 				"items":       map[string]interface{}{"type": "string"},
-				"description": "One or more workspace-relative directories to search recursively.",
+				"description": `One or more workspace-relative directories to search recursively. Must be a JSON array of strings, e.g. ["src/b2"] or ["src/b2", "lib"].`,
 			},
 		},
 		"required": []string{"language", "function_name", "directories"},

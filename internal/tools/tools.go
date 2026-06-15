@@ -808,7 +808,31 @@ func stringSlice(args map[string]interface{}, key string) ([]string, error) {
 		}
 		return out, nil
 	case string:
-		return []string{v}, nil // tolerate a single path passed as a bare string
+		// Tolerate a single path passed as a bare string ("src/b2") or an
+		// array-like string that some models emit: properly-quoted JSON
+		// ("[\"src/b2\"]") or unquoted bracket syntax ("[src/b2]").
+		if strings.HasPrefix(v, "[") {
+			var parsed []string
+			if err := json.Unmarshal([]byte(v), &parsed); err == nil {
+				return parsed, nil
+			}
+			// Unquoted: strip brackets, split on commas, trim whitespace.
+			if strings.HasSuffix(v, "]") {
+				inner := strings.TrimSpace(v[1 : len(v)-1])
+				if inner == "" {
+					return nil, fmt.Errorf("'%s' must be a non-empty array", key)
+				}
+				parts := strings.Split(inner, ",")
+				out := make([]string, 0, len(parts))
+				for _, p := range parts {
+					if s := strings.TrimSpace(p); s != "" {
+						out = append(out, s)
+					}
+				}
+				return out, nil
+			}
+		}
+		return []string{v}, nil
 	default:
 		return nil, fmt.Errorf("'%s' must be an array of strings", key)
 	}
