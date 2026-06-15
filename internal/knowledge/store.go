@@ -44,7 +44,8 @@ type fileRecord struct {
 	NotFound bool
 	Note     string         // optional, e.g. "120 lines" or "directory"
 	Lines    map[int]string // line number -> text; nil until content is read
-	touched  int
+	created  int            // seq at first creation; never updated
+	touched  int            // seq at most recent write
 }
 
 type searchRecord struct {
@@ -52,7 +53,8 @@ type searchRecord struct {
 	Params  string // human-readable canonical params, e.g. `"acquireLock"`
 	Results []string
 	Note    string // optional, e.g. "no matches"
-	touched int
+	created int    // seq at first creation; never updated
+	touched int    // seq at most recent write
 }
 
 // New returns an empty store. maxChars caps the size of the rendered Markdown;
@@ -71,7 +73,7 @@ func (s *Store) file(path string) *fileRecord {
 	if r, ok := s.fileIdx[path]; ok {
 		return r
 	}
-	r := &fileRecord{Path: path}
+	r := &fileRecord{Path: path, created: s.bump()}
 	s.fileIdx[path] = r
 	s.files = append(s.files, r)
 	return r
@@ -135,7 +137,7 @@ func (s *Store) AddSearch(tool, params string, results []string) bool {
 	key := tool + "\x00" + params
 	r, ok := s.searchIdx[key]
 	if !ok {
-		r = &searchRecord{Tool: tool, Params: params}
+		r = &searchRecord{Tool: tool, Params: params, created: s.bump()}
 		s.searchIdx[key] = r
 		s.searches = append(s.searches, r)
 	}
@@ -161,7 +163,7 @@ func (s *Store) SetSearchNote(tool, params, note string) {
 	key := tool + "\x00" + params
 	r, ok := s.searchIdx[key]
 	if !ok {
-		r = &searchRecord{Tool: tool, Params: params}
+		r = &searchRecord{Tool: tool, Params: params, created: s.bump()}
 		s.searchIdx[key] = r
 		s.searches = append(s.searches, r)
 	}
@@ -229,8 +231,8 @@ func (s *Store) Render() string {
 		return out
 	}
 
-	// Pass 1: elide file line-text, least-recently-touched first.
-	for _, f := range s.byTouchedFiles() {
+	// Pass 1: elide file line-text, oldest-created first.
+	for _, f := range s.byCreatedFiles() {
 		if len(f.Lines) == 0 {
 			continue
 		}
@@ -240,9 +242,9 @@ func (s *Store) Render() string {
 		}
 	}
 
-	// Pass 2: drop whole records, least-recently-touched first, across both
-	// kinds, until we fit (or nothing remains).
-	for _, key := range s.byTouchedAll() {
+	// Pass 2: drop whole records, oldest-created first, across both kinds,
+	// until we fit (or nothing remains).
+	for _, key := range s.byCreatedAll() {
 		st.dropped[key] = true
 		if out = s.render(st); len(out) <= s.maxChars {
 			return out
@@ -343,27 +345,27 @@ func (s *Store) renderSearch(r *searchRecord) string {
 	return b.String()
 }
 
-// byTouchedFiles returns file records sorted least-recently-touched first.
-func (s *Store) byTouchedFiles() []*fileRecord {
+// byCreatedFiles returns file records sorted oldest-created first.
+func (s *Store) byCreatedFiles() []*fileRecord {
 	out := append([]*fileRecord(nil), s.files...)
-	sort.SliceStable(out, func(i, j int) bool { return out[i].touched < out[j].touched })
+	sort.SliceStable(out, func(i, j int) bool { return out[i].created < out[j].created })
 	return out
 }
 
-// byTouchedAll returns all record keys sorted least-recently-touched first.
-func (s *Store) byTouchedAll() []string {
+// byCreatedAll returns all record keys sorted oldest-created first.
+func (s *Store) byCreatedAll() []string {
 	type item struct {
 		key     string
-		touched int
+		created int
 	}
 	var items []item
 	for _, f := range s.files {
-		items = append(items, item{"F:" + f.Path, f.touched})
+		items = append(items, item{"F:" + f.Path, f.created})
 	}
 	for _, r := range s.searches {
-		items = append(items, item{"S:" + r.Tool + "\x00" + r.Params, r.touched})
+		items = append(items, item{"S:" + r.Tool + "\x00" + r.Params, r.created})
 	}
-	sort.SliceStable(items, func(i, j int) bool { return items[i].touched < items[j].touched })
+	sort.SliceStable(items, func(i, j int) bool { return items[i].created < items[j].created })
 	keys := make([]string, len(items))
 	for i, it := range items {
 		keys[i] = it.key
@@ -384,12 +386,16 @@ func (s *Store) JSON() ([]byte, error) {
 		Note     string   `json:"note,omitempty"`
 		Ranges   string   `json:"known_lines,omitempty"`
 		Lines    [][2]any `json:"lines,omitempty"` // [lineNumber, text]
+		Created  int      `json:"seq_created"`
+		Touched  int      `json:"seq_modified"`
 	}
 	type searchOut struct {
 		Tool    string   `json:"tool"`
 		Params  string   `json:"params"`
 		Note    string   `json:"note,omitempty"`
 		Results []string `json:"results,omitempty"`
+		Created int      `json:"seq_created"`
+		Touched int      `json:"seq_modified"`
 	}
 	type out struct {
 		Files    []fileOut   `json:"files,omitempty"`
@@ -398,7 +404,7 @@ func (s *Store) JSON() ([]byte, error) {
 
 	var o out
 	for _, f := range s.files {
-		fo := fileOut{Path: f.Path, NotFound: f.NotFound, Note: f.Note}
+		fo := fileOut{Path: f.Path, NotFound: f.NotFound, Note: f.Note, Created: f.created, Touched: f.touched}
 		if len(f.Lines) > 0 {
 			nums := make([]int, 0, len(f.Lines))
 			for n := range f.Lines {
@@ -413,7 +419,7 @@ func (s *Store) JSON() ([]byte, error) {
 		o.Files = append(o.Files, fo)
 	}
 	for _, r := range s.searches {
-		o.Searches = append(o.Searches, searchOut{Tool: r.Tool, Params: r.Params, Note: r.Note, Results: r.Results})
+		o.Searches = append(o.Searches, searchOut{Tool: r.Tool, Params: r.Params, Note: r.Note, Results: r.Results, Created: r.created, Touched: r.touched})
 	}
 	return json.MarshalIndent(o, "", "  ")
 }

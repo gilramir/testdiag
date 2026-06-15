@@ -101,8 +101,8 @@ func TestEvictionElidesThenDrops(t *testing.T) {
 
 func TestEvictionKeepsRecentFacts(t *testing.T) {
 	s := New(0)
-	s.AddLines("old.go", 1, mkLines(1, 40))    // touched early
-	s.AddLines("recent.go", 1, mkLines(1, 40)) // touched later
+	s.AddLines("old.go", 1, mkLines(1, 40))    // created first
+	s.AddLines("recent.go", 1, mkLines(1, 40)) // created later
 	full := s.Render()
 
 	capped := New(len(full) - len(full)/3)
@@ -116,6 +116,35 @@ func TestEvictionKeepsRecentFacts(t *testing.T) {
 		strings.Contains(afterHeader(out, "### old.go"), "content elided")
 	if !oldElided {
 		t.Errorf("expected old.go to be elided first:\n%s", out)
+	}
+}
+
+func TestEvictionByCreationNotModification(t *testing.T) {
+	// old.go is created first but then written again (high touched seq).
+	// new.go is created later.
+	// Under a tight budget, old.go should still be evicted first because
+	// eviction is ordered by creation time, not last-modification time.
+	s := New(0)
+	s.AddLines("old.go", 1, mkLines(1, 40))
+	s.AddLines("new.go", 1, mkLines(1, 40))
+	s.AddLines("old.go", 41, mkLines(41, 80)) // re-touch old.go after new.go exists
+	full := s.Render()
+
+	capped := New(len(full) - len(full)/3)
+	capped.AddLines("old.go", 1, mkLines(1, 40))
+	capped.AddLines("new.go", 1, mkLines(1, 40))
+	capped.AddLines("old.go", 41, mkLines(41, 80))
+	out := capped.Render()
+
+	oldElided := strings.Contains(out, "### old.go") &&
+		strings.Contains(afterHeader(out, "### old.go"), "content elided")
+	if !oldElided {
+		t.Errorf("expected old.go (oldest created) to be elided first despite recent write:\n%s", out)
+	}
+	newKept := strings.Contains(out, "### new.go") &&
+		!strings.Contains(afterHeader(out, "### new.go"), "content elided")
+	if !newKept {
+		t.Errorf("expected new.go (newer created) to keep its content:\n%s", out)
 	}
 }
 
