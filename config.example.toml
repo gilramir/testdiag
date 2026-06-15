@@ -70,12 +70,14 @@ max_tokens     = 4096
 # Optional (fallback in parentheses):
 #   hypothesize             — reads the brief + architecture doc, produces hypotheses (-> logparse)
 #   planinspection          — tool-using survey: finds the files DEEPINSPECT should read (-> deepinspect)
+#   setgoals                — turns each plan into step-by-step inspection goals for DEEPINSPECT (-> deepinspect)
 #   summarize               — summarizes each hypothesis and names the most likely root cause (-> logparse)
 #   lessons                 — meta-analysis of the run for developers (-> logparse)
 #   memorize                — distills durable codebase facts into .testdiag/memory.md (-> logparse)
 #   logparse_feedback       — checks the LOGPARSE brief quality (-> logparse)
 #   hypothesize_feedback    — checks the HYPOTHESIZE hypothesis list (-> hypothesize)
 #   planinspection_feedback — checks each PLANINSPECTION plan (-> planinspection)
+#   setgoals_feedback       — checks each SETGOALS goal list (-> setgoals)
 #   deepinspect_feedback    — checks each DEEPINSPECT result (-> deepinspect)
 #   summarize_feedback      — checks the SUMMARIZE output (-> summarize)
 #
@@ -88,12 +90,14 @@ logparse    = "fast"
 deepinspect = "deep"
 # hypothesize             = "fast"
 # planinspection          = "deep"
+# setgoals                = "deep"
 # summarize               = "fast"
 # lessons                 = "fast"
 # memorize                = "fast"
 # logparse_feedback       = "fast"
 # hypothesize_feedback    = "fast"
 # planinspection_feedback = "fast"
+# setgoals_feedback       = "fast"
 # deepinspect_feedback    = "fast"
 # summarize_feedback      = "fast"
 
@@ -153,6 +157,11 @@ logparse_max_feedbacks         = 2
 
 #   env: TESTDIAG_HYPOTHESIZE_MAX_FEEDBACKS
 hypothesize_max_feedbacks      = 2
+
+# Times the FEEDBACK gate may reject a SETGOALS goal list (per hypothesis,
+# soft-failed on exhaustion). 0 disables SETGOALS feedback.
+#   env: TESTDIAG_SETGOALS_MAX_FEEDBACKS
+setgoals_max_feedbacks         = 2
 
 #   env: TESTDIAG_DEEPINSPECT_MAX_FEEDBACKS
 deepinspect_max_feedbacks      = 1

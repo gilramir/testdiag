@@ -150,6 +150,7 @@ func run(opts *options) error {
 	// deepinspect for tool-using stages.
 	hypothesizeLLM := fallbackLLM(cfg, config.StageHypothsize, logparseLLM)
 	planLLM := fallbackLLM(cfg, config.StagePlanInspect, deepinspectLLM)
+	setgoalsLLM := fallbackLLM(cfg, config.StageSetGoals, deepinspectLLM)
 	summarizeLLM := fallbackLLM(cfg, config.StageSummarize, logparseLLM)
 	lessonsLLM := fallbackLLM(cfg, config.StageLessons, logparseLLM)
 	memorizeLLM := fallbackLLM(cfg, config.StageMemoize, logparseLLM)
@@ -158,6 +159,7 @@ func run(opts *options) error {
 	logparseFBLLM := fallbackLLM(cfg, config.StageLogParseFeedback, logparseLLM)
 	hypothesizeFBLLM := fallbackLLM(cfg, config.StageHypothsizeFeedback, hypothesizeLLM)
 	planFBLLM := fallbackLLM(cfg, config.StagePlanInspectFeedback, planLLM)
+	setgoalsFBLLM := fallbackLLM(cfg, config.StageSetGoalsFeedback, setgoalsLLM)
 	deepinspectFBLLM := fallbackLLM(cfg, config.StageDeepInspectFeedback, deepinspectLLM)
 	summarizeFBLLM := fallbackLLM(cfg, config.StageSummarizeFeedback, summarizeLLM)
 
@@ -183,6 +185,8 @@ func run(opts *options) error {
 			"hypothesize":             &hypothesizeLLM,
 			"hypothesize_feedback":    &hypothesizeFBLLM,
 			"planinspection_feedback": &planFBLLM,
+			"setgoals":                &setgoalsLLM,
+			"setgoals_feedback":       &setgoalsFBLLM,
 			"deepinspect_feedback":    &deepinspectFBLLM,
 			"summarize":               &summarizeLLM,
 			"summarize_feedback":      &summarizeFBLLM,
@@ -231,6 +235,10 @@ func run(opts *options) error {
 			FeedbackLLM:  planFBLLM,
 			ResetCounter: pm.resetFn("planinspection"),
 		},
+		SetGoals: pipeline.StageSpec{
+			LLM:         setgoalsLLM,
+			FeedbackLLM: setgoalsFBLLM,
+		},
 		DeepInspect: pipeline.StageSpec{
 			LLM:          deepinspectLLM,
 			FeedbackLLM:  deepinspectFBLLM,
@@ -269,6 +277,8 @@ func run(opts *options) error {
 		fmt.Printf("  HYPOTHESIZE -> %s (model %s, feedbacks=%d)\n",
 			hypothesizeLLM.BaseURL, hypothesizeLLM.Model, sc.HypothesizeMaxFeedbacks)
 	}
+	fmt.Printf("  SETGOALS    -> %s (model %s, feedbacks=%d)\n",
+		setgoalsLLM.BaseURL, setgoalsLLM.Model, sc.SetGoalsMaxFeedbacks)
 	fmt.Printf("  DEEPINSPECT -> %s (model %s, tools=%v, max_iters=%d, feedbacks=%d)\n",
 		deepinspectLLM.BaseURL, deepinspectLLM.Model, toolNames,
 		sc.DeepInspectMaxToolIterations, sc.DeepInspectMaxFeedbacks)

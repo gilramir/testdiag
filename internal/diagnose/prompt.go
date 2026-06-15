@@ -14,7 +14,7 @@ import (
 // static System message every turn but rebuilds the User message from the
 // freshly-rendered knowledge tree each round. Anything the agent must not forget
 // belongs in the System prompt.
-func buildSystemPrompt(m failmode.Mode, brief, hypothesis, plan, sourceFile string, maxToolIterations int) string {
+func buildSystemPrompt(m failmode.Mode, brief, hypothesis, plan, goals, sourceFile string, maxToolIterations int) string {
 	var b strings.Builder
 
 	fmt.Fprintf(&b, `You are an expert software engineer and CI failure analyst. Your job is to investigate ONE specific hypothesis about why a test failed, find evidence confirming or refuting it in the actual source code, and report your conclusion.
@@ -23,6 +23,7 @@ You are given:
 - An INVESTIGATION BRIEF from an earlier log-analysis stage naming the first real error, source leads, and failure conditions
 - A SPECIFIC HYPOTHESIS to investigate — your entire tool budget goes toward confirming or refuting this one hypothesis
 - An INSPECTION PLAN (when available) from a planning stage that has already surveyed the workspace and identified the most relevant files — start there
+- A set of INSPECTION GOALS (when available) — an ordered, step-by-step plan telling you which files to examine, what to look for, and what to do depending on what you find; follow it
 - The LIKELY SOURCE FILE for the failing test (when the test→source mapper resolved one) — a good first place to look
 
 THERE ARE NO LOGS FOR YOU TO READ. The failure log has already been consumed and is NOT available. Everything useful from the log is in the brief. Do not look for log files.
@@ -84,6 +85,11 @@ OPTIONAL — include this section ONLY if you found a strong, evidence-backed ro
 		b.WriteString("A planning stage has already surveyed the workspace for this hypothesis. Start from the files below; you may follow additional leads as needed.\n\n")
 		b.WriteString(strings.TrimSpace(plan))
 	}
+	if strings.TrimSpace(goals) != "" {
+		b.WriteString("\n\n## Inspection goals (from SETGOALS)\n")
+		b.WriteString("These ordered goals were derived from the inspection plan to drive your investigation. Work through them in order: each names a file and what to look for, and tells you what it means whether or not you find it. Follow the \"if found / if not found\" guidance, but stay alert for a better explanation.\n\n")
+		b.WriteString(strings.TrimSpace(goals))
+	}
 
 	fmt.Fprintf(&b, "\n\n## Tool budget and working memory\n"+
 		"You have a budget of **%d tool rounds**. Everything your tools return is automatically recorded in a running \"What you have learned so far\" section that is shown back to you every turn, with file reads merged into line ranges — so you never need to take notes, and there is no point re-reading something already shown there.\n"+
@@ -95,7 +101,7 @@ OPTIONAL — include this section ONLY if you found a strong, evidence-backed ro
 }
 
 // buildUserPrompt assembles the first user message for one DEEPINSPECT attempt.
-// The brief, hypothesis, plan, and mapped source file live in the SYSTEM prompt
+// The brief, hypothesis, plan, goals, and mapped source file live in the SYSTEM prompt
 // (so they persist across every turn of the tool loop); this message carries the task
 // framing, prior-attempt feedback on a retry, and project context.
 func buildUserPrompt(input DiagnoseInput, background, memory string) string {

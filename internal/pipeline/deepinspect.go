@@ -46,8 +46,13 @@ func (s *deepInspectAllStage) Run(ctx context.Context, sc *Context) error {
 		if i < len(sc.Plans) && !sc.Plans[i].Failed {
 			planContent = sc.Plans[i].Content
 		}
+		// Pass the SETGOALS output for this hypothesis, if available and successful.
+		var goalsContent string
+		if i < len(sc.SetGoals) && !sc.SetGoals[i].Failed {
+			goalsContent = sc.SetGoals[i].Content
+		}
 		tools.ResetToolLog()
-		out := s.runOne(ctx, sc, h, planContent)
+		out := s.runOne(ctx, sc, h, planContent, goalsContent)
 		s.writeToolLog(sc, h, tools.CollectToolLog())
 		sc.DeepInspects = append(sc.DeepInspects, out)
 	}
@@ -56,7 +61,7 @@ func (s *deepInspectAllStage) Run(ctx context.Context, sc *Context) error {
 
 // runOne runs the DEEPINSPECT+FEEDBACK loop for one hypothesis. It never
 // returns an error; failures are captured in the returned outcome.
-func (s *deepInspectAllStage) runOne(ctx context.Context, sc *Context, h Hypothesis, planContent string) DeepInspectOutcome {
+func (s *deepInspectAllStage) runOne(ctx context.Context, sc *Context, h Hypothesis, planContent, goalsContent string) DeepInspectOutcome {
 	out := DeepInspectOutcome{Hypothesis: h}
 
 	if s.resetCounter != nil {
@@ -83,6 +88,7 @@ func (s *deepInspectAllStage) runOne(ctx context.Context, sc *Context, h Hypothe
 			Hypothesis:      h.Text(),
 			HypothesisIndex: h.Index,
 			Plan:            planContent,
+			Goals:           goalsContent,
 			PrevResult:      prevResult,
 			Critique:        critique,
 		})

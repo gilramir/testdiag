@@ -20,7 +20,7 @@ Given a Jenkins build URL:
 
    ```
    DOWNLOAD → LOGPARSE → FEEDBACK → HYPOTHESIZE → FEEDBACK →
-   [PLANINSPECTION → FEEDBACK → DEEPINSPECT → FEEDBACK] × N →
+   [PLANINSPECTION → FEEDBACK → SETGOALS → FEEDBACK → DEEPINSPECT → FEEDBACK] × N →
    SUMMARIZE → FEEDBACK → LESSONS → MEMORIZE
    ```
 
@@ -33,6 +33,8 @@ Given a Jenkins build URL:
    | FEEDBACK | Accept hypothesis list or return critique | — |
    | PLANINSPECTION × N | Breadth-first workspace survey → annotated file list for DEEPINSPECT | workspace source tools |
    | FEEDBACK | Accept plan or return critique | — |
+   | SETGOALS × N | Turn the plan into step-by-step inspection goals (file → what to look for → if found / if not found) for DEEPINSPECT | — |
+   | FEEDBACK | Accept goals or return critique | — |
    | DEEPINSPECT × N | Confirm/refute hypothesis via source inspection | workspace source tools |
    | FEEDBACK | Accept result or return critique | — |
    | SUMMARIZE | Summarize each hypothesis (noting whether an inspection result exists), then identify the most likely root cause | — |
@@ -66,10 +68,21 @@ Given a Jenkins build URL:
      in that case.
    - **FEEDBACK per PLANINSPECTION** — checks each plan; retries up to
      `planinspection_max_feedbacks` times.
+   - **SETGOALS × N** — one tool-less LLM pass per hypothesis. It reads the
+     hypothesis and that hypothesis's PLANINSPECTION file list (plus the brief)
+     and writes a **step-by-step list of inspection goals** that drives
+     DEEPINSPECT: which file to examine, what to look for there, what it means if
+     found, and what to do if not found — ending with the criteria for a
+     CONFIRMED / REFUTED / INCONCLUSIVE verdict
+     (`.testdiag/handoff/<test>.h<N>.setgoals.md`). A failed goal list is noted but
+     does not stop the pipeline; DEEPINSPECT works from the plan (or brief) alone
+     in that case.
+   - **FEEDBACK per SETGOALS** — checks each goal list; retries up to
+     `setgoals_max_feedbacks` times.
    - **DEEPINSPECT × N** — one fresh agent per hypothesis, equipped with
-     **workspace source tools** (jailed to the checkout). It receives both the
-     hypothesis and the PLANINSPECTION file list and is instructed to start from
-     those files. Each agent determines whether its hypothesis is CONFIRMED /
+     **workspace source tools** (jailed to the checkout). It receives the
+     hypothesis, the PLANINSPECTION file list, and the SETGOALS goals, and is
+     instructed to work through those goals. Each agent determines whether its hypothesis is CONFIRMED /
      REFUTED / INCONCLUSIVE. The raw log is withheld entirely. A hypothesis that
      errors or exhausts its feedback budget is marked as failed but does **not**
      stop the pipeline.
@@ -212,6 +225,7 @@ deepinspect = "deep"   # gets the brief + plan + source tools, finds the root ca
 
 # Optional: override individual stages
 # planinspection           = "deep"   # surveys workspace for relevant files; defaults to deepinspect LLM
+# setgoals                 = "deep"   # writes step-by-step goals for DEEPINSPECT; defaults to deepinspect LLM
 # hypothesize              = "fast"   # all others default to logparse LLM
 # summarize                = "fast"
 # lessons                  = "fast"   # meta-analysis; defaults to logparse LLM
@@ -219,6 +233,7 @@ deepinspect = "deep"   # gets the brief + plan + source tools, finds the root ca
 # logparse_feedback        = "fast"
 # hypothesize_feedback     = "fast"
 # planinspection_feedback  = "fast"
+# setgoals_feedback        = "fast"
 # deepinspect_feedback     = "fast"
 # summarize_feedback       = "fast"
 ```
@@ -249,6 +264,7 @@ logparse_max_feedbacks                = 2   # TESTDIAG_LOGPARSE_MAX_FEEDBACKS
 hypothesize_max_feedbacks             = 2   # TESTDIAG_HYPOTHESIZE_MAX_FEEDBACKS
 planinspection_max_feedbacks          = 1   # TESTDIAG_PLANINSPECTION_MAX_FEEDBACKS
 planinspection_max_tool_iterations    = 20  # TESTDIAG_PLANINSPECTION_MAX_TOOL_ITERATIONS
+setgoals_max_feedbacks                = 2   # TESTDIAG_SETGOALS_MAX_FEEDBACKS
 deepinspect_max_feedbacks             = 1   # TESTDIAG_DEEPINSPECT_MAX_FEEDBACKS
 deepinspect_max_tool_iterations       = 50  # TESTDIAG_DEEPINSPECT_MAX_TOOL_ITERATIONS
 summarize_max_feedbacks                 = 2   # TESTDIAG_SUMMARIZE_MAX_FEEDBACKS
@@ -331,7 +347,7 @@ normalizes the various native tool-call syntaxes (GPT-OSS Harmony, Gemma
 the calls, folds the results into the tree, and repeats. See `CLAUDE.md` (the
 `internal/inspect` and `internal/knowledge` notes) for the design.
 
-The tool-less stages (LOGPARSE, HYPOTHESIZE, SUMMARIZE, LESSONS, FEEDBACK) make a
+The tool-less stages (LOGPARSE, HYPOTHESIZE, SETGOALS, SUMMARIZE, LESSONS, FEEDBACK) make a
 single completion call. `internal/llmproxy` is a now-vestigial reverse proxy that
 `main.go` still optionally points the tool-less stages at for `--debug` conversation
 logging; the tool-using stages bypass it.
@@ -347,11 +363,12 @@ internal/pipeline           stage state machine and all stage implementations
   logparse.go               LOGPARSE stage (with feedback retry loop)
   hypothesize.go            HYPOTHESIZE stage (with feedback retry loop)
   planinspect.go            PLANINSPECTION-all stage (one breadth-first survey per hypothesis)
+  setgoals.go               SETGOALS-all stage (one tool-less goal list per hypothesis)
   deepinspect.go            DEEPINSPECT-all stage (one deep investigation per hypothesis)
   summarize.go              SUMMARIZE stage (with feedback retry loop)
   lessons.go                LESSONS stage (tool-less meta-analysis, no feedback gate)
   feedback.go               feedbackChecker + per-stage quality criteria
-  pipeline.go               Pipeline, Context, FinalResult, Hypothesis, PlanInspectOutcome, DeepInspectOutcome
+  pipeline.go               Pipeline, Context, FinalResult, Hypothesis, PlanInspectOutcome, SetGoalsOutcome, DeepInspectOutcome
 internal/inspect            the LLM client (Complete) + tool-loop engine + result ingest
 internal/knowledge          the fact tree the tool loop accumulates and renders each turn
 internal/planner            PLANINSPECTION stage layer (builds + runs an inspect.Engine)

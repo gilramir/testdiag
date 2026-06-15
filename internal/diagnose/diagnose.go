@@ -33,6 +33,7 @@ type DiagnoseInput struct {
 	Hypothesis      string // the full hypothesis text to investigate
 	HypothesisIndex int    // 1-based index
 	Plan            string // PLAN output: annotated file list (may be empty)
+	Goals           string // SETGOALS output: step-by-step inspection goals (may be empty)
 	PrevResult      string // empty on first attempt; prior draft for retry
 	Critique        string // empty on first attempt; feedback for retry
 }
@@ -113,7 +114,7 @@ func (d *Diagnoser) Diagnose(ctx context.Context, input DiagnoseInput) (Result, 
 	tools.ResetFindFilesCache()
 
 	r, err := engine.Run(ctx, inspect.RunInput{
-		System: buildSystemPrompt(d.mode, input.Brief, input.Hypothesis, input.Plan, m.SourceFile, d.maxToolIterations),
+		System: buildSystemPrompt(d.mode, input.Brief, input.Hypothesis, input.Plan, input.Goals, m.SourceFile, d.maxToolIterations),
 		Task:   buildUserPrompt(input, d.background, d.memory),
 	})
 	if err != nil {

@@ -131,6 +131,22 @@ Respond with EXACTLY ONE of:
 
 Output nothing else.`
 
+// setGoalsFeedbackPrompt is the criteria for a SETGOALS output.
+const setGoalsFeedbackPrompt = `You are reviewing a step-by-step inspection goal list produced by the SETGOALS stage. The list will drive a deep-inspection agent (DEEPINSPECT) that reads workspace source files to confirm or refute ONE specific hypothesis about a failing test.
+
+A good goal list must satisfy ALL FIVE criteria:
+1. Contains an "## Inspection Goals" section that is an ORDERED (numbered) list of at least two concrete steps.
+2. Each step names a specific workspace file (and, where possible, a symbol or line region) — not vague prose like "look at the relevant code." When an inspection plan was provided, the files should come from it.
+3. Each step states WHAT to look for in that file and ties it to the hypothesis.
+4. Each step specifies BOTH what it means if the thing IS found AND what to do if it is NOT found (a fallback or next step).
+5. Steps are ordered most-decisive-first and cover both sides of the hypothesis boundary, and the list ends with a "## Verdict Criteria" note defining what evidence justifies CONFIRMED vs REFUTED vs INCONCLUSIVE.
+
+Respond with EXACTLY ONE of:
+- The single word APPROVED if all five criteria are met, OR
+- NEEDS REVISION: followed by a concise bulleted list of exactly what is missing or unclear.
+
+Output nothing else.`
+
 // buildDeepInspectFeedbackPrompt is the criteria for a DEEPINSPECT analysis. The
 // mechanism criterion adapts to the failure mode. A serendipitously discovered
 // alternative cause is welcomed, not penalized.

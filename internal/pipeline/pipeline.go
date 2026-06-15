@@ -13,8 +13,15 @@
 //	                 produces an annotated file list for DEEPINSPECT to follow
 //	                 (.testdiag/handoff/<test>.h<N>.planinspect.md); soft-fails per hypothesis
 //	FEEDBACK        — checks each plan (up to PlanMaxFeedbacks)
+//	SETGOALS        — one tool-less LLM pass per hypothesis; reads the hypothesis and the
+//	                 PLANINSPECTION file list and writes a step-by-step list of inspection
+//	                 goals (which file to read, what to look for, what to do if found / not
+//	                 found) that drives DEEPINSPECT (.testdiag/handoff/<test>.h<N>.setgoals.md);
+//	                 soft-fails per hypothesis
+//	FEEDBACK        — checks each goal list (up to SetGoalsMaxFeedbacks)
 //	DEEPINSPECT     — one agent run per hypothesis, jailed to workspace source tools;
-//	                 receives both the hypothesis and the PLANINSPECTION output; each gets
+//	                 receives the hypothesis, the PLANINSPECTION output, and the SETGOALS
+//	                 goals; each gets
 //	                 its own FEEDBACK gate; a failed hypothesis is noted but does not stop the pipeline;
 //	                 result saved to .testdiag/handoff/<test>.h<N>.deepinspect.md
 //	SUMMARIZE       — summarizes each hypothesis (noting whether an inspection result
@@ -54,6 +61,7 @@ const (
 	StateFeedback    State = "FEEDBACK"
 	StateHypothsize  State = "HYPOTHESIZE"
 	StatePlanInspect State = "PLANINSPECTION"
+	StateSetGoals    State = "SETGOALS"
 	StateDeepInspect State = "DEEPINSPECT"
 	StateSummarize   State = "SUMMARIZE"
 	StateLessons     State = "LESSONS"
@@ -85,6 +93,17 @@ type PlanInspectOutcome struct {
 	FailReason       string   // populated when Failed=true
 }
 
+// SetGoalsOutcome records the result of one SETGOALS+FEEDBACK pass for one
+// hypothesis. A failed outcome is noted but does not stop the pipeline —
+// DEEPINSPECT will work from the plan (or the brief) alone for that hypothesis.
+type SetGoalsOutcome struct {
+	Hypothesis       Hypothesis
+	Content          string // step-by-step inspection goals as Markdown
+	FeedbackApproved bool   // true if FEEDBACK accepted the result
+	Failed           bool   // true if the run errored or feedback was exhausted
+	FailReason       string // populated when Failed=true
+}
+
 // DeepInspectOutcome records the result of one DEEPINSPECT+FEEDBACK pass for
 // one hypothesis. A failed outcome (Failed=true) is noted but does not stop
 // the pipeline.
@@ -105,6 +124,7 @@ type FinalResult struct {
 	Brief        string               // LOGPARSE output
 	Hypotheses   []Hypothesis         // HYPOTHESIZE output
 	Plans        []PlanInspectOutcome // one per hypothesis (PLANINSPECTION stage)
+	SetGoals     []SetGoalsOutcome    // one per hypothesis (SETGOALS stage)
 	DeepInspects []DeepInspectOutcome // one per hypothesis
 	Summary      string               // SUMMARIZE output
 	LessonsPath  string               // LESSONS handoff file (workspace-relative)
@@ -121,6 +141,7 @@ type Context struct {
 	HypothesisPath string               // HYPOTHESIZE handoff file
 	Hypotheses     []Hypothesis         // HYPOTHESIZE parsed output
 	Plans          []PlanInspectOutcome // PLANINSPECTION+FEEDBACK results, one per hypothesis
+	SetGoals       []SetGoalsOutcome    // SETGOALS+FEEDBACK results, one per hypothesis
 	DeepInspects   []DeepInspectOutcome // DEEPINSPECT+FEEDBACK results
 	SummaryPath    string               // SUMMARIZE handoff file
 	Summary        string               // SUMMARIZE content
@@ -151,6 +172,7 @@ type PipelineSpec struct {
 	LogParse    StageSpec
 	Hypothesize StageSpec
 	Plan        StageSpec
+	SetGoals    StageSpec
 	DeepInspect StageSpec
 	Summarize   StageSpec
 	Lessons     StageSpec
@@ -179,7 +201,7 @@ func New(cfg *config.Config, ws *workspace.Workspace, spec PipelineSpec, mode fa
 	diagnoser := diagnose.New(ws, spec.DeepInspect.LLM, mode, background, memory, sc.DeepInspectMaxToolIterations, sc.InspectMaxKnowledgeChars, cfg.Workspace.Mapper, interrupt, drainInterrupt)
 
 	// Build feedback checkers for each stage.
-	var lpFB, hFB, planFB, diFB, cFB *feedbackChecker
+	var lpFB, hFB, planFB, sgFB, diFB, cFB *feedbackChecker
 	if sc.LogParseMaxFeedbacks > 0 {
 		lpFB = &feedbackChecker{llm: spec.LogParse.FeedbackLLM, systemPrompt: buildLogParseFeedbackPrompt(mode)}
 	}
@@ -188,6 +210,9 @@ func New(cfg *config.Config, ws *workspace.Workspace, spec PipelineSpec, mode fa
 	}
 	if sc.PlanMaxFeedbacks > 0 {
 		planFB = &feedbackChecker{llm: spec.Plan.FeedbackLLM, systemPrompt: planInspectFeedbackPrompt}
+	}
+	if sc.SetGoalsMaxFeedbacks > 0 {
+		sgFB = &feedbackChecker{llm: spec.SetGoals.FeedbackLLM, systemPrompt: setGoalsFeedbackPrompt}
 	}
 	if sc.DeepInspectMaxFeedbacks > 0 {
 		diFB = &feedbackChecker{llm: spec.DeepInspect.FeedbackLLM, systemPrompt: buildDeepInspectFeedbackPrompt(mode)}
@@ -210,6 +235,10 @@ func New(cfg *config.Config, ws *workspace.Workspace, spec PipelineSpec, mode fa
 	if sc.PlanMaxFeedbacks > 0 {
 		names = append(names, StateFeedback)
 	}
+	names = append(names, StateSetGoals)
+	if sc.SetGoalsMaxFeedbacks > 0 {
+		names = append(names, StateFeedback)
+	}
 	names = append(names, StateDeepInspect)
 	names = append(names, StateSummarize)
 	if sc.SummarizeMaxFeedbacks > 0 {
@@ -223,6 +252,7 @@ func New(cfg *config.Config, ws *workspace.Workspace, spec PipelineSpec, mode fa
 			newLogParseStage(ws, spec.LogParse.LLM, mode, lpFB, sc.LogParseMaxFeedbacks, verbose, pauseFn),
 			newHypothesizeStage(ws, spec.Hypothesize.LLM, mode, archDoc, memory, hFB, sc.HypothesizeMaxFeedbacks, verbose, pauseFn),
 			newPlanInspectAllStage(plnr, ws, archDoc, planFB, sc.PlanMaxFeedbacks, spec.Plan.ResetCounter, verbose, pauseFn),
+			newSetGoalsAllStage(ws, spec.SetGoals.LLM, sgFB, sc.SetGoalsMaxFeedbacks, verbose, pauseFn),
 			newDeepInspectAllStage(diagnoser, ws, diFB, sc.DeepInspectMaxFeedbacks, spec.DeepInspect.ResetCounter, verbose, pauseFn),
 			newSummarizeStage(ws, spec.Summarize.LLM, cFB, sc.SummarizeMaxFeedbacks, verbose, pauseFn),
 			newLessonsStage(ws, spec.Lessons.LLM, archDoc, verbose, pauseFn),
@@ -270,6 +300,7 @@ func (p *Pipeline) Run(ctx context.Context, test jenkins.FailedTest) (FinalResul
 		Brief:        sc.Brief,
 		Hypotheses:   sc.Hypotheses,
 		Plans:        sc.Plans,
+		SetGoals:     sc.SetGoals,
 		DeepInspects: sc.DeepInspects,
 		Summary:      sc.Summary,
 		LessonsPath:  sc.LessonsPath,

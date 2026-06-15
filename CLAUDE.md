@@ -10,7 +10,7 @@ Jenkins build URL it fetches the test report, and for each failed test it runs a
 
 ```
 DOWNLOAD → LOGPARSE → FEEDBACK → HYPOTHESIZE → FEEDBACK →
-[PLANINSPECTION → FEEDBACK → DEEPINSPECT → FEEDBACK] × N →
+[PLANINSPECTION → FEEDBACK → SETGOALS → FEEDBACK → DEEPINSPECT → FEEDBACK] × N →
 SUMMARIZE → FEEDBACK → LESSONS
 ```
 
@@ -21,7 +21,9 @@ SUMMARIZE → FEEDBACK → LESSONS
 - **FEEDBACK** — gate on the hypothesis list (`hypothesize_max_feedbacks`)
 - **PLANINSPECTION × N** — one fresh tool-using agent per hypothesis; breadth-first workspace survey that produces a prioritized, annotated file list for DEEPINSPECT to follow; soft-fails per hypothesis. Runs on the **own tool-loop engine** (`internal/inspect`) — see the inspect/knowledge note below.
 - **FEEDBACK per PLANINSPECTION** — gate on each plan (`planinspection_max_feedbacks`); also a deterministic Go gate that rejects any plan listing files that do not exist in the workspace (see `internal/pipeline/planinspect.go`)
-- **DEEPINSPECT × N** — one fresh agent per hypothesis, jailed to the workspace source tools; investigates whether that hypothesis is CONFIRMED / REFUTED / INCONCLUSIVE. Also runs on the `internal/inspect` engine.
+- **SETGOALS × N** — one tool-less LLM pass per hypothesis; reads the hypothesis and that hypothesis's PLANINSPECTION file list (plus the brief) and writes a step-by-step list of inspection goals that drives DEEPINSPECT: which file to read, what to look for there, what it means if found, and what to do if not found. Soft-fails per hypothesis. Output at `.testdiag/handoff/<test>.h<N>.setgoals.md`.
+- **FEEDBACK per SETGOALS** — gate on each goal list (`setgoals_max_feedbacks`)
+- **DEEPINSPECT × N** — one fresh agent per hypothesis, jailed to the workspace source tools; receives the hypothesis, the PLANINSPECTION plan, and the SETGOALS goals, and investigates whether that hypothesis is CONFIRMED / REFUTED / INCONCLUSIVE. Also runs on the `internal/inspect` engine.
 - **FEEDBACK per DEEPINSPECT** — gate on each DEEPINSPECT result (`deepinspect_max_feedbacks`); a failed hypothesis is soft-failed (noted but does not stop the pipeline)
 - **SUMMARIZE** — tool-less LLM pass; for each hypothesis writes a paragraph explaining what DEEPINSPECT found (or explicitly noting no result if the inspection failed or was not run), then adds a "Most Likely Root Cause" verdict
 - **FEEDBACK** — gate on the summary (`summarize_max_feedbacks`)
@@ -92,7 +94,8 @@ The pipeline is sequential: fetch failures → run each failure through the stag
   sensible default at the call site. Per-stage tuning knobs live under `[stage_config]`
   as a flat struct (`StageConfig`): `logparse_max_feedbacks`, `hypothesize_max_feedbacks`,
   `planinspection_max_feedbacks`, `planinspection_max_tool_iterations`,
-  `deepinspect_max_feedbacks`, `deepinspect_max_tool_iterations`,
+  `setgoals_max_feedbacks`, `deepinspect_max_feedbacks`,
+  `deepinspect_max_tool_iterations`,
   `summarize_max_feedbacks`, and `inspect_max_knowledge_chars` (the character cap
   on the `internal/knowledge` fact tree rendered into the PLANINSPECTION/DEEPINSPECT
   context each turn; default 24000, env `TESTDIAG_INSPECT_MAX_KNOWLEDGE_CHARS`) —
@@ -126,6 +129,15 @@ The pipeline is sequential: fetch failures → run each failure through the stag
     backtick-quoted path from each list entry, resolves it through the workspace,
     and forces a FEEDBACK revision listing any path that does not exist — the LLM
     feedback gate cannot reliably verify file existence, so Go does it directly
+  - `setgoals.go` — `setGoalsAllStage` iterates over `sc.Hypotheses`; for each it
+    runs a **tool-less** `inspect.Complete` pass (no workspace exploration — the
+    planner already did that) that turns the hypothesis + that hypothesis's
+    PLANINSPECTION file list + the brief into a numbered, step-by-step list of
+    inspection goals (file → what to look for → if-found → if-not-found) plus a
+    "Verdict Criteria" note, for DEEPINSPECT to follow. Retries with FEEDBACK up to
+    `setgoals_max_feedbacks` times; soft-fails per hypothesis; results accumulate in
+    `sc.SetGoals`; output at `.testdiag/handoff/<test>.h<N>.setgoals.md`. DEEPINSPECT
+    receives the goals via `DiagnoseInput.Goals` (in its system prompt)
   - `summarize.go` — tool-less agent that produces two things: (1) for each
     hypothesis, a short paragraph — if a DEEPINSPECT result exists it explains
     what was found (confirmed/refuted/inconclusive) and the key evidence; if the
@@ -146,15 +158,17 @@ The pipeline is sequential: fetch failures → run each failure through the stag
   - `feedback.go` — `feedbackChecker` is a shared struct with a configurable
     `systemPrompt` field; each stage gate uses a different prompt constant
     (`logParseFeedbackPrompt`, `hypothesizeFeedbackPrompt`, `planInspectFeedbackPrompt`,
-    `deepInspectFeedbackPrompt`, `summarizeFeedbackPrompt`). `feedbackChecker.Check`
-    returns APPROVED or a critique string the caller uses to build a retry prompt.
+    `setGoalsFeedbackPrompt`, `deepInspectFeedbackPrompt`, `summarizeFeedbackPrompt`).
+    `feedbackChecker.Check` returns APPROVED or a critique string the caller uses to
+    build a retry prompt.
 
   Key types in `pipeline.go`: `Hypothesis{Index, Title, Description}`,
   `PlanInspectOutcome{Hypothesis, Content, ToolsCalled, FeedbackApproved, Failed,
+  FailReason}`, `SetGoalsOutcome{Hypothesis, Content, FeedbackApproved, Failed,
   FailReason}`, `DeepInspectOutcome{Hypothesis, Content, ToolsCalled, FeedbackApproved,
   Failed, FailReason}`, `FinalResult{…, Summary, LessonsPath, …}` (returned by `Run`,
   consumed by `report`), `StageSpec{LLM, FeedbackLLM, ResetCounter}`,
-  `PipelineSpec{LogParse, Hypothesize, Plan, DeepInspect, Summarize, Lessons}`
+  `PipelineSpec{LogParse, Hypothesize, Plan, SetGoals, DeepInspect, Summarize, Lessons}`
   (passed to `New`).
 
 - **`internal/jenkins`** — normalizes any build/testReport URL to
@@ -250,12 +264,12 @@ The pipeline is sequential: fetch failures → run each failure through the stag
 - **`internal/diagnose`** — the DEEPINSPECT stage layer. `Diagnoser.New(ws, llm, mode,
   background, memory, maxToolIterations, maxChars, mapper, interrupt, drainFn)` creates
   a diagnoser. `Diagnose(ctx, DiagnoseInput{Test, Brief, Hypothesis, HypothesisIndex,
-  Plan, PrevResult, Critique})` maps the test (via `internal/mapping`), hard-disables
+  Plan, Goals, PrevResult, Critique})` maps the test (via `internal/mapping`), hard-disables
   the log tools, builds a fresh `inspect.Engine` (advertising the source tools minus
   the log tools and the dormant `notebook`), and runs it once. When `PrevResult`+
   `Critique` are set, the `Task` includes the prior draft and feedback so the retry
-  goes deeper. The `brief`, `hypothesis`, **inspection plan, and mapped source file**
-  go in the **system prompt** so they persist across every turn of the loop. The
+  goes deeper. The `brief`, `hypothesis`, **inspection plan, SETGOALS goals, and mapped
+  source file** go in the **system prompt** so they persist across every turn of the loop. The
   prompt also (a) permits a serendipitous "## Alternative Cause Discovered" section,
   and (b) reframes the tool budget to verify both sides of the hypothesis boundary.
   No internal critique/revise loop — that is handled externally by
