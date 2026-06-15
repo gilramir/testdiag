@@ -32,7 +32,7 @@ CRITICAL — %s %s
 
 STAY ALERT FOR A BETTER EXPLANATION: your assigned hypothesis may simply be wrong. If, while investigating, you uncover strong evidence for a DIFFERENT root cause, follow that lead and document it in an "## Alternative Cause Discovered" section (see the output format). You must still deliver a verdict on your ASSIGNED hypothesis, but a serendipitous, well-evidenced discovery of the real cause is extremely valuable — do not discard it.
 
-You have read-only tools to explore the workspace:
+You have tools to explore the workspace:
 - file_exists(path): check whether a path exists and whether it is a file or directory.
 - function_lookup(language, function_name, directories): find where a named function is defined across source files of the target language (C++/python/Go/rust); returns file + line number.
 - list_directory(path): list a directory's entries.
@@ -44,7 +44,9 @@ You have read-only tools to explore the workspace:
 - search_repo(pattern, path, include, ignore_case): recursively grep the whole tree — use sparingly with an include glob.
 - git_blame(path, start, end): who/what/when last changed a line range — use it to find when a suspicious line was introduced and whether it is a recent change.
 - git_log(path, limit, patch): recent commits that touched a file — a recent commit near the failing code is a prime regression suspect.
-- run_script(script, language): run a short shell/Python script with operator approval — for targeted experiments only.
+- run_script(language, script): write a Python (preferred) or shell script that runs in the workspace root — your most powerful investigation tool. Use it whenever the question spans many files or needs logic the other tools cannot express: walk directory trees, match complex patterns across files, inspect ASTs, correlate values, or run a targeted experiment. One well-written Python script replaces many grep/search_repo/find_files calls and costs only one tool round. The operator approves the exact script before it runs; a declined script runs nothing. Keep scripts read-only where possible.
+
+PREFER run_script OVER CHAINS OF SEARCH CALLS: if investigating a question would require three or more grep, find_files, or search_repo calls, write a Python script instead — it is faster, uses fewer rounds, and can express richer logic.
 
 Tool paths are always WORKSPACE-RELATIVE. Never pass an absolute path.
 
@@ -95,7 +97,8 @@ OPTIONAL — include this section ONLY if you found a strong, evidence-backed ro
 		"You have a budget of **%d tool rounds**. Everything your tools return is automatically recorded in a running \"What you have learned so far\" section that is shown back to you every turn, with file reads merged into line ranges — so you never need to take notes, and there is no point re-reading something already shown there.\n"+
 		"- Never repeat a search or read whose result already appears in what you have learned — those facts will not change. Spend each round learning something new.\n"+
 		"- Before committing to CONFIRMED or REFUTED, check BOTH sides of the boundary the hypothesis turns on: read the code that would make it true AND the code that would make it false. A verdict drawn from a single file is usually too shallow.\n"+
-		"- While budget remains and the evidence is still thin, keep digging into the strongest lead rather than settling for the first plausible answer.",
+		"- While budget remains and the evidence is still thin, keep digging into the strongest lead rather than settling for the first plausible answer.\n"+
+		"- When a question spans many files or requires logic grep/search_repo cannot express, write a Python script with run_script instead of chaining multiple search calls — one script costs one round and can answer in a single pass.",
 		maxToolIterations)
 	return b.String()
 }

@@ -105,11 +105,13 @@ type runScriptTool struct{ ws *workspace.Workspace }
 
 func (t *runScriptTool) Name() string { return "run_script" }
 func (t *runScriptTool) Description() string {
-	return "Write and execute a shell or Python script in the workspace root and return its exit code, stdout and stderr. " +
-		"DANGEROUS: the script runs real commands on the operator's machine, so the operator is shown the exact script and " +
-		"must approve it before it runs — a script may be declined, in which case nothing runs. Use it only when reading " +
-		"files is not enough (e.g. to reproduce a failure, inspect the environment, or run a quick experiment); keep scripts " +
-		"short, read-only where possible, and self-contained. The working directory is the project checkout."
+	return "Write and execute a Python or shell script in the workspace root to investigate the codebase. " +
+		"Use this whenever a question spans many files or requires logic that grep/search_repo/find_files cannot express in one call — " +
+		"a single Python script can walk directory trees, match complex patterns, inspect ASTs, count occurrences, or correlate " +
+		"facts across files in one pass, using far fewer tool rounds than the equivalent chain of individual tool calls. " +
+		"The operator is shown the exact script and must approve it before it runs; a declined script runs nothing. " +
+		"Keep scripts read-only where possible, focused on a single investigative question, and self-contained. " +
+		"The working directory is the project checkout."
 }
 func (t *runScriptTool) JSONSchema() map[string]interface{} {
 	return map[string]interface{}{
