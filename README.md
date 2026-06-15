@@ -4,9 +4,6 @@ A CLI that diagnoses automated-test failures from a Jenkins build, using an LLM
 that can read the project's source with file-inspection tools to find the
 **root cause** of each failure.
 
-> Status: reference implementation. It is wired end-to-end but has one
-> deliberate placeholder you must fill in (see [Placeholders](#placeholders)).
-
 ## What it does
 
 Given a Jenkins build URL:
