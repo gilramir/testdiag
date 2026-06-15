@@ -160,7 +160,7 @@ func (h *chatHandler) runChatLoop(w http.ResponseWriter, r *http.Request, firstM
 }
 
 // callUpstream POSTs body directly to the upstream LLM, copying auth headers
-// from the original AGK request. Returns the parsed JSON response body.
+// from the original client request. Returns the parsed JSON response body.
 func (h *chatHandler) callUpstream(ctx context.Context, origReq *http.Request, body map[string]interface{}) (map[string]interface{}, error) {
 	out, err := json.Marshal(body)
 	if err != nil {

@@ -1,14 +1,13 @@
 // Package toolproto normalizes the many tool-calling "protocols" that
-// open-weight models emit into the single canonical text form that
-// AgenticGoKit's parser understands:
+// open-weight models emit into the single canonical text form the inspect
+// engine's tool-loop parser understands:
 //
 //	TOOL_CALL{"name":"read_file","args":{"path":"main.go"}}
 //
-// AgenticGoKit's OpenAI-compatible adapter does no native tool calling: it only
-// returns assistant message *content*, and the agent's reasoning loop parses
-// tool calls out of that text with a small set of recognized shapes (TOOL_CALL,
-// `tool_name:`/`args:`, function-style, ReAct). Models such as GPT-OSS, Gemma,
-// Mistral/devmistral and Nemotron each emit their own native syntax instead, so
+// The tool loop parses tool calls out of the assistant message *content* with a
+// small set of recognized shapes (TOOL_CALL, `tool_name:`/`args:`,
+// function-style, ReAct). Models such as GPT-OSS, Gemma, Mistral/devmistral and
+// Nemotron each emit their own native syntax instead, so without normalization
 // the loop never sees a tool call. Normalize rewrites those native syntaxes
 // into the TOOL_CALL form, which the loop parses first and most reliably.
 //
@@ -35,7 +34,7 @@ type Call struct {
 	Args map[string]interface{}
 }
 
-// Render returns the canonical AgenticGoKit text form for one call.
+// Render returns the canonical TOOL_CALL text form for one call.
 func (c Call) Render() string {
 	args := c.Args
 	if args == nil {
@@ -89,9 +88,8 @@ func Normalize(content string) string {
 // Parse normalizes content (rewriting any native tool-call syntax into the
 // canonical TOOL_CALL form) and then extracts every TOOL_CALL{...} occurrence
 // into a Call. It returns nil when the content carries no tool call — i.e. the
-// model produced a final natural-language answer. This is the entry point for a
-// caller that drives the tool loop itself rather than handing content to
-// AgenticGoKit's parser.
+// model produced a final natural-language answer. This is the entry point the
+// inspect engine uses to drive the tool loop itself.
 func Parse(content string) []Call {
 	normalized := Normalize(content)
 	var calls []Call

@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gilbertr/testdiag/internal/diagnose"
-	"github.com/gilbertr/testdiag/internal/tools"
-	"github.com/gilbertr/testdiag/internal/workspace"
+	"github.com/gilramir/testdiag/internal/diagnose"
+	"github.com/gilramir/testdiag/internal/tools"
+	"github.com/gilramir/testdiag/internal/workspace"
 )
 
 // deepInspectAllStage runs one DEEPINSPECT+FEEDBACK pass per hypothesis from

@@ -13,12 +13,12 @@ import (
 	"os"
 	"strings"
 
-	"github.com/gilbertr/testdiag/internal/config"
-	"github.com/gilbertr/testdiag/internal/inspect"
-	"github.com/gilbertr/testdiag/internal/jenkins"
-	"github.com/gilbertr/testdiag/internal/mapping"
-	"github.com/gilbertr/testdiag/internal/tools"
-	"github.com/gilbertr/testdiag/internal/workspace"
+	"github.com/gilramir/testdiag/internal/config"
+	"github.com/gilramir/testdiag/internal/inspect"
+	"github.com/gilramir/testdiag/internal/jenkins"
+	"github.com/gilramir/testdiag/internal/mapping"
+	"github.com/gilramir/testdiag/internal/tools"
+	"github.com/gilramir/testdiag/internal/workspace"
 )
 
 // PlanInput carries everything a single PLAN attempt needs.
@@ -97,7 +97,8 @@ func (p *Planner) Plan(ctx context.Context, input PlanInput) (Result, error) {
 }
 
 // systemPromptBase is the static part of the PLAN system prompt. The brief and
-// hypothesis are appended so they survive AGK's continuation loop.
+// hypothesis are appended so they persist in the system prompt across every turn
+// of the tool loop.
 const systemPromptBase = `You are an expert software engineer acting as a CODE NAVIGATOR. Your job is NOT to investigate deeply or prove a hypothesis — the next stage (DEEPINSPECT) will do that. Your job is to PLAN the investigation: given the hypothesis (including the key symbols and files-to-inspect it names), survey the workspace with your tools and produce a prioritized list of concrete (file-path or glob, search pattern, reason) tuples for DEEPINSPECT to follow.
 
 You are given:

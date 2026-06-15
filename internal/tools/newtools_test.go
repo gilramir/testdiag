@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gilbertr/testdiag/internal/workspace"
+	"github.com/gilramir/testdiag/internal/workspace"
 )
 
 // setupWS builds a temporary workspace with a few files and returns it.

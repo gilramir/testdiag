@@ -1,19 +1,17 @@
 // Package llmproxy runs a tiny in-process reverse proxy in front of an
 // OpenAI-compatible LLM endpoint so that testdiag works with models whose
-// native tool-calling syntax differs from what AgenticGoKit understands.
+// native tool-calling syntax the tool loop would not otherwise recognize.
 //
-// Why this exists: AgenticGoKit v0.5.x's OpenAI adapter does NOT do native tool
-// calling — it never sends a `tools` array and reads only
-// choices[].message.content from the response. The agent then parses tool calls
-// out of that text. Models like GPT-OSS, Gemma, Mistral and Nemotron emit their
-// own tool-call syntaxes, which that parser doesn't recognize. This proxy sits
-// between the adapter and the real server and fixes both ends:
+// Why this exists: a tool loop that reads only choices[].message.content and
+// parses tool calls out of that text never sees the native tool-call syntaxes
+// emitted by models like GPT-OSS, Gemma, Mistral and Nemotron. This proxy sits
+// between the client and the real server and fixes both ends:
 //
 //   - Request side:  injects a `tools` array (so tool-aware chat templates
 //     advertise the tools to the model) when tool schemas are provided.
 //   - Response side:  rewrites whatever tool-call format the model emitted —
 //     native syntax in the content, or a structured tool_calls field — into the
-//     canonical TOOL_CALL{...} text the agent reliably parses (see toolproto).
+//     canonical TOOL_CALL{...} text the tool loop reliably parses (see toolproto).
 //
 // Because every request and response flows through here, it is also the natural
 // place to log the full conversation with the LLM for debugging (Options.Debug).
@@ -37,7 +35,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/gilbertr/testdiag/internal/toolproto"
+	"github.com/gilramir/testdiag/internal/toolproto"
 )
 
 // Tool is a tool definition advertised to the model via the request's `tools`
@@ -53,7 +51,7 @@ type Options struct {
 	// Tools, if non-empty, is injected into every chat-completions request.
 	Tools []Tool
 	// Normalize rewrites each model's native tool-call syntax in responses into
-	// the canonical TOOL_CALL text AgenticGoKit parses. When false the proxy
+	// the canonical TOOL_CALL text the tool loop parses. When false the proxy
 	// passes responses through unchanged (useful when only Debug is wanted).
 	Normalize bool
 	// Debug logs the full request/response conversation with the LLM to stderr.
@@ -215,21 +213,20 @@ func injectTools(body map[string]interface{}, tools []map[string]interface{}) {
 	}
 }
 
-// agkContinuationNudge is the verbatim instruction AgenticGoKit (v0.5.x) appends
-// to the user message of its post-tool continuation prompt
-// (v1beta/agent_impl.go). It pressures the model to stop calling tools, which
-// cuts our multi-step diagnosis short before the agent has read enough source.
-// The framework offers no way to disable it, so the proxy rewrites it on the way
-// out — see scrubContinuationNudge.
-const agkContinuationNudge = "provide a final answer. Do NOT make additional tool calls unless absolutely necessary."
+// continuationNudge is a "stop calling tools" instruction a continuation prompt
+// can append to the user message after a tool call. It pressures the model to
+// stop calling tools, which cuts a multi-step diagnosis short before the agent
+// has read enough source, so the proxy rewrites it on the way out — see
+// scrubContinuationNudge.
+const continuationNudge = "provide a final answer. Do NOT make additional tool calls unless absolutely necessary."
 
-// agkContinuationReplacement is the permissive instruction we substitute, telling
+// continuationReplacement is the permissive instruction we substitute, telling
 // the agent to keep investigating until it has the root cause.
-const agkContinuationReplacement = "keep investigating: call more tools whenever you need more evidence, and give your final answer only once you have found the root cause."
+const continuationReplacement = "keep investigating: call more tools whenever you need more evidence, and give your final answer only once you have found the root cause."
 
-// scrubContinuationNudge replaces AgenticGoKit's "stop calling tools" nudge in
-// every message's content with a permissive instruction. Returns whether it
-// changed anything. Content may be a plain string or an array of typed parts.
+// scrubContinuationNudge replaces a "stop calling tools" nudge in every
+// message's content with a permissive instruction. Returns whether it changed
+// anything. Content may be a plain string or an array of typed parts.
 func scrubContinuationNudge(body map[string]interface{}) bool {
 	msgs, ok := body["messages"].([]interface{})
 	if !ok {
@@ -266,10 +263,10 @@ func scrubContinuationNudge(body map[string]interface{}) bool {
 }
 
 func stripNudge(s string) (string, bool) {
-	if !strings.Contains(s, agkContinuationNudge) {
+	if !strings.Contains(s, continuationNudge) {
 		return s, false
 	}
-	return strings.ReplaceAll(s, agkContinuationNudge, agkContinuationReplacement), true
+	return strings.ReplaceAll(s, continuationNudge, continuationReplacement), true
 }
 
 // modifyResponse optionally normalizes tool-call syntax in a chat-completions

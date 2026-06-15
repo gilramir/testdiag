@@ -364,6 +364,3 @@ internal/report             Markdown report writer (SUMMARIZE body + per-hypothe
 internal/llmproxy           vestigial proxy (debug logging) + the operator InterruptController
 internal/toolproto          normalize open-model tool-call syntaxes
 ```
-
-The git-ignored `AgenticGoKit/` directory is a leftover reference clone; the
-dependency has been removed and nothing uses it.

@@ -20,12 +20,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gilbertr/testdiag/internal/workspace"
+	"github.com/gilramir/testdiag/internal/workspace"
 )
 
 // Tool is the read-only interface a workspace tool implements: a name, a
-// description, and an Execute. (This was AgenticGoKit's v1beta.Tool; we own it
-// now that the inspect engine drives the tool loop directly.)
+// description, and an Execute. The inspect engine drives the tool loop directly
+// against this interface.
 type Tool interface {
 	Name() string
 	Description() string
@@ -92,7 +92,7 @@ func SetVerbose(v bool) { verbose.Store(v) }
 func VerboseEnabled() bool { return verbose.Load() }
 
 // debug, when set, makes the loggingTool wrapper print each tool call's COMPLETE
-// result to stderr — the exact, untruncated Content that AGK feeds back to the
+// result to stderr — the exact, untruncated Content that is fed back to the
 // LLM. The verbose start/done lines and the tool log only show summaries; this is
 // for an operator who wants to see precisely what the model receives. Like
 // verbose it is a process-global because the tools are shared singletons.
@@ -294,7 +294,7 @@ func (t *loggingTool) Execute(ctx context.Context, args map[string]interface{}) 
 }
 
 // logFullResult prints a tool call's complete, untruncated result to stderr so an
-// operator running with --debug sees exactly what AGK will feed back to the LLM.
+// operator running with --debug sees exactly what will be fed back to the LLM.
 func logFullResult(name string, args map[string]interface{}, res *Result, err error) {
 	var body string
 	switch {
@@ -369,10 +369,10 @@ type Schema struct {
 	Parameters  map[string]interface{}
 }
 
-// Schemas returns the schema of every workspace tool. The normalizing proxy
-// uses these to inject a `tools` array into outbound requests, because
-// AgenticGoKit's OpenAI adapter does not send tool definitions itself. No path
-// is resolved here, so a nil workspace is fine.
+// Schemas returns the schema of every workspace tool. The inspect engine (and
+// the normalizing proxy) uses these to inject a `tools` array into outbound
+// requests so tool-aware chat templates advertise the tools to the model. No
+// path is resolved here, so a nil workspace is fine.
 func Schemas() []Schema { return SchemasExcluding() }
 
 // SchemasExcluding is Schemas without the named tools. The DEEPINSPECT stage

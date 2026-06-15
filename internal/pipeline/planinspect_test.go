@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/gilbertr/testdiag/internal/workspace"
+	"github.com/gilramir/testdiag/internal/workspace"
 )
 
 func TestExtractPlanFiles(t *testing.T) {

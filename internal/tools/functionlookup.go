@@ -9,7 +9,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/gilbertr/testdiag/internal/workspace"
+	"github.com/gilramir/testdiag/internal/workspace"
 )
 
 const maxFunctionMatches = 100

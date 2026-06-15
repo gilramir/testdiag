@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// parseRendered extracts calls from normalized output the same way AgenticGoKit
+// parseRendered extracts calls from normalized output the same way the tool loop
 // does: split on the TOOL_CALL marker and decode the balanced JSON that follows.
 func parseRendered(t *testing.T, content string) []Call {
 	t.Helper()

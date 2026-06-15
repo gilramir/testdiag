@@ -29,7 +29,7 @@ SUMMARIZE → FEEDBACK → LESSONS
 
 Each stage hands off to the next through a Markdown file on disk (`.testdiag/handoff/`) and each LLM can be configured independently. Different LLMs can be assigned to different stages so a cheap model can parse the log while a stronger one does the source tracing.
 
-**LLM calls are all ours.** There is no agent framework: every LLM call goes through the small OpenAI-compatible client in `internal/inspect` (`client.go`). The tool-less stages (LOGPARSE, HYPOTHESIZE, SUMMARIZE, LESSONS, MEMORIZE, and every FEEDBACK gate) make a single `inspect.Complete(system, user)` call. The two **tool-using** stages (PLANINSPECTION, DEEPINSPECT) run the full `inspect.Engine` loop, which accumulates results into a deduplicated **fact tree** (`internal/knowledge`) re-rendered into the context every turn. This whole design replaced AgenticGoKit, whose continuation loop kept only the single most recent tool result, dropped the original user message after the first tool call, and nudged the model to stop calling tools — together starving the deep agent of working memory. AGK has since been removed entirely (no `go.mod` dependency). The `internal/llmproxy` reverse proxy still optionally fronts the tool-less stages (for `--debug` conversation logging); the tool-using stages bypass it. See the `internal/inspect`, `internal/knowledge`, and `internal/llmproxy` notes below.
+**LLM calls are all ours.** There is no agent framework: every LLM call goes through the small OpenAI-compatible client in `internal/inspect` (`client.go`). The tool-less stages (LOGPARSE, HYPOTHESIZE, SUMMARIZE, LESSONS, MEMORIZE, and every FEEDBACK gate) make a single `inspect.Complete(system, user)` call. The two **tool-using** stages (PLANINSPECTION, DEEPINSPECT) run the full `inspect.Engine` loop, which accumulates results into a deduplicated **fact tree** (`internal/knowledge`) re-rendered into the context every turn. This design keeps the deep agent's working memory intact: it deliberately avoids a naive continuation loop that would keep only the single most recent tool result, drop the original user message after the first tool call, and nudge the model to stop calling tools. There is no agent-framework dependency in `go.mod`. The `internal/llmproxy` reverse proxy still optionally fronts the tool-less stages (for `--debug` conversation logging); the tool-using stages bypass it. See the `internal/inspect`, `internal/knowledge`, and `internal/llmproxy` notes below.
 
 See `README.md` for the user-facing description and `plan.txt` for the original design notes.
 
@@ -225,9 +225,9 @@ The pipeline is sequential: fetch failures → run each failure through the stag
   results into the tree (`ingest.go`, with a generic fallback so no result is lost),
   and repeats. No tool call ⇒ the reply is the final answer; at `MaxIterations` it
   asks once more advertising no tools to force one. The fact tree is the working
-  memory, so the engine does NOT keep a growing message array (this is the explicit
-  fix for AGK's continuation loop, which kept only the latest tool result, dropped
-  the original user message, and discouraged further tool calls). `client.go` is a
+  memory, so the engine does NOT keep a growing message array (this deliberately
+  avoids a naive continuation loop that would keep only the latest tool result, drop
+  the original user message, and discourage further tool calls). `client.go` is a
   small OpenAI `/chat/completions` client talking to the model server directly (no
   proxy); structured `tool_calls` are folded into the text via `toolproto.FromStructured`.
   Operator-interrupt support is reimplemented here via the `Interrupter` interface
@@ -291,8 +291,9 @@ The pipeline is sequential: fetch failures → run each failure through the stag
 - **`internal/llmproxy`** — an in-process reverse proxy that can front an LLM
   endpoint, injecting the workspace tools into a request and running the response
   `content` (and any structured `tool_calls`) through `toolproto`. It was built to
-  compensate for AgenticGoKit's OpenAI adapter doing no native tool calling; with
-  AGK gone it is **largely vestigial** — `main.go` still repoints the tool-less
+  compensate for an OpenAI client that does no native tool calling; now that the
+  `internal/inspect` engine does that itself, the proxy is **largely vestigial** —
+  `main.go` still repoints the tool-less
   stages' `BaseURL` at it so `--debug` conversation logging keeps working, but the
   tool-using stages bypass it (the `internal/inspect` engine does tool injection and
   normalization itself). The still-useful `InterruptController` lives here: it is the
@@ -304,12 +305,9 @@ The pipeline is sequential: fetch failures → run each failure through the stag
 
 - **No agent framework.** All LLM interaction is hand-rolled in `internal/inspect`
   against any OpenAI-API-compatible server (`provider = "openai"` with a custom
-  `base_url`, including local ones). AgenticGoKit was removed; do not reintroduce a
-  framework dependency without a strong reason.
-- The git-ignored `AgenticGoKit/` directory in the tree is a leftover reference
-  clone, no longer used by anything (the dependency is gone from `go.mod`). Safe to
-  delete; don't expect editing it to have any effect.
-- Module path is `github.com/gilbertr/testdiag`; Go 1.24.
+  `base_url`, including local ones). Do not introduce an agent-framework
+  dependency without a strong reason.
+- Module path is `github.com/gilramir/testdiag`; Go 1.24.
 - New tools exposed to the model must implement `tools.ToolWithSchema`
   (`Name`/`Description`/`Execute` returning `*tools.Result`, plus `JSONSchema()`),
   be added to the slice in `tools.toolDefs`, take paths only via

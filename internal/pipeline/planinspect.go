@@ -8,9 +8,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/gilbertr/testdiag/internal/planner"
-	"github.com/gilbertr/testdiag/internal/tools"
-	"github.com/gilbertr/testdiag/internal/workspace"
+	"github.com/gilramir/testdiag/internal/planner"
+	"github.com/gilramir/testdiag/internal/tools"
+	"github.com/gilramir/testdiag/internal/workspace"
 )
 
 // peekToolLog returns the current tool call log formatted as Markdown,

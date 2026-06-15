@@ -7,11 +7,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gilbertr/testdiag/internal/config"
-	"github.com/gilbertr/testdiag/internal/failmode"
-	"github.com/gilbertr/testdiag/internal/inspect"
-	"github.com/gilbertr/testdiag/internal/jenkins"
-	"github.com/gilbertr/testdiag/internal/workspace"
+	"github.com/gilramir/testdiag/internal/config"
+	"github.com/gilramir/testdiag/internal/failmode"
+	"github.com/gilramir/testdiag/internal/inspect"
+	"github.com/gilramir/testdiag/internal/jenkins"
+	"github.com/gilramir/testdiag/internal/workspace"
 )
 
 // handoffDir holds the Markdown handoff files stages write for the next stage,

@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gilbertr/testdiag/internal/workspace"
+	"github.com/gilramir/testdiag/internal/workspace"
 )
 
 // Caps for the script-running tool. Scripts are arbitrary code, so output is

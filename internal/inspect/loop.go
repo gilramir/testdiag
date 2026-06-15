@@ -6,10 +6,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/gilbertr/testdiag/internal/config"
-	"github.com/gilbertr/testdiag/internal/knowledge"
-	"github.com/gilbertr/testdiag/internal/toolproto"
-	"github.com/gilbertr/testdiag/internal/tools"
+	"github.com/gilramir/testdiag/internal/config"
+	"github.com/gilramir/testdiag/internal/knowledge"
+	"github.com/gilramir/testdiag/internal/toolproto"
+	"github.com/gilramir/testdiag/internal/tools"
 )
 
 // Interrupter lets an operator inject guidance into a running investigation. It

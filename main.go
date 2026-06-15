@@ -26,15 +26,15 @@ import (
 
 	"github.com/gilramir/argparse/v2"
 
-	"github.com/gilbertr/testdiag/internal/config"
-	"github.com/gilbertr/testdiag/internal/distill"
-	"github.com/gilbertr/testdiag/internal/failmode"
-	"github.com/gilbertr/testdiag/internal/jenkins"
-	"github.com/gilbertr/testdiag/internal/llmproxy"
-	"github.com/gilbertr/testdiag/internal/pipeline"
-	"github.com/gilbertr/testdiag/internal/report"
-	"github.com/gilbertr/testdiag/internal/tools"
-	"github.com/gilbertr/testdiag/internal/workspace"
+	"github.com/gilramir/testdiag/internal/config"
+	"github.com/gilramir/testdiag/internal/distill"
+	"github.com/gilramir/testdiag/internal/failmode"
+	"github.com/gilramir/testdiag/internal/jenkins"
+	"github.com/gilramir/testdiag/internal/llmproxy"
+	"github.com/gilramir/testdiag/internal/pipeline"
+	"github.com/gilramir/testdiag/internal/report"
+	"github.com/gilramir/testdiag/internal/tools"
+	"github.com/gilramir/testdiag/internal/workspace"
 )
 
 // backgroundFile is read from the workspace root and injected into every
@@ -172,7 +172,7 @@ func run(opts *options) error {
 	// The tool-using stages (PLANINSPECTION, DEEPINSPECT) no longer go through
 	// the proxy: internal/inspect drives their tool loop itself, talking to the
 	// model server directly and doing its own tool-injection and tool-call
-	// normalization. Only the tool-less, AGK-driven stages are fronted.
+	// normalization. Only the tool-less stages are fronted.
 	pm := newProxyManager(cfg.Proxy, opts.Verbose, ic)
 	defer pm.Close()
 	if pm.enabled() {

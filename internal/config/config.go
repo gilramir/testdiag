@@ -78,7 +78,7 @@ type LLMSpec struct {
 type Proxy struct {
 	// NormalizeToolCalls runs requests through an in-process proxy that rewrites
 	// each model's native tool-call syntax (GPT-OSS/Gemma/Mistral/Nemotron) into
-	// the form AgenticGoKit parses. On by default; harmless if the model already
+	// the canonical TOOL_CALL form. On by default; harmless if the model already
 	// uses a recognized format. Disable for a model that needs no translation.
 	NormalizeToolCalls bool `toml:"normalize_tool_calls"`
 	// InjectTools makes that proxy add a `tools` array to each request so

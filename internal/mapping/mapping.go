@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gilbertr/testdiag/internal/jenkins"
+	"github.com/gilramir/testdiag/internal/jenkins"
 )
 
 // Result is the outcome of mapping a test to its source location.

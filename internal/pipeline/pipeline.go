@@ -36,13 +36,13 @@ import (
 	"os"
 	"time"
 
-	"github.com/gilbertr/testdiag/internal/config"
-	"github.com/gilbertr/testdiag/internal/diagnose"
-	"github.com/gilbertr/testdiag/internal/failmode"
-	"github.com/gilbertr/testdiag/internal/inspect"
-	"github.com/gilbertr/testdiag/internal/jenkins"
-	"github.com/gilbertr/testdiag/internal/planner"
-	"github.com/gilbertr/testdiag/internal/workspace"
+	"github.com/gilramir/testdiag/internal/config"
+	"github.com/gilramir/testdiag/internal/diagnose"
+	"github.com/gilramir/testdiag/internal/failmode"
+	"github.com/gilramir/testdiag/internal/inspect"
+	"github.com/gilramir/testdiag/internal/jenkins"
+	"github.com/gilramir/testdiag/internal/planner"
+	"github.com/gilramir/testdiag/internal/workspace"
 )
 
 // State names the stages of the diagnosis state machine.

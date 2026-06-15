@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gilbertr/testdiag/internal/jenkins"
-	"github.com/gilbertr/testdiag/internal/workspace"
+	"github.com/gilramir/testdiag/internal/jenkins"
+	"github.com/gilramir/testdiag/internal/workspace"
 )
 
 // logDir is where fetched failure logs are written, relative to the workspace

@@ -1,13 +1,13 @@
-// Package inspect drives a tool-using investigation loop ourselves instead of
-// delegating to AgenticGoKit. Each turn sends exactly two messages — a static
-// system prompt and a user message that is the freshly-rendered knowledge tree
-// (see internal/knowledge) plus a next-step instruction. The knowledge tree
-// replaces a growing message array: every fact a tool has returned is preserved
-// and re-presented every turn, so the agent never loses what it has learned.
+// Package inspect drives a tool-using investigation loop ourselves. Each turn
+// sends exactly two messages — a static system prompt and a user message that is
+// the freshly-rendered knowledge tree (see internal/knowledge) plus a next-step
+// instruction. The knowledge tree replaces a growing message array: every fact a
+// tool has returned is preserved and re-presented every turn, so the agent never
+// loses what it has learned.
 //
-// This fixes the three failure modes of AGK v0.5.x's continuation loop, which
-// (1) kept only the single most recent tool result, (2) discarded the original
-// user message after the first tool call, and (3) actively told the model to
+// This deliberately avoids the three failure modes of a naive continuation loop,
+// which would (1) keep only the single most recent tool result, (2) discard the
+// original user message after the first tool call, and (3) pressure the model to
 // stop calling tools.
 package inspect
 
@@ -21,9 +21,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gilbertr/testdiag/internal/config"
-	"github.com/gilbertr/testdiag/internal/toolproto"
-	"github.com/gilbertr/testdiag/internal/tools"
+	"github.com/gilramir/testdiag/internal/config"
+	"github.com/gilramir/testdiag/internal/toolproto"
+	"github.com/gilramir/testdiag/internal/tools"
 )
 
 // Client sends a two-message (system + user) chat completion and returns the
@@ -52,8 +52,8 @@ func newHTTPClient(llm config.LLMSpec) *httpClient {
 // Complete runs a single tool-less chat completion (system + user) against the
 // given LLM and returns the assistant's text. It is the shared entry point for
 // the tool-less stages (LOGPARSE, HYPOTHESIZE, SUMMARIZE, LESSONS, FEEDBACK, and
-// MEMORIZE), which previously each built a throwaway AgenticGoKit agent with
-// tools and memory disabled — exactly this call.
+// MEMORIZE), each of which needs a single chat completion with no tools and no
+// memory — exactly this call.
 func Complete(ctx context.Context, llm config.LLMSpec, system, user string) (string, error) {
 	return newHTTPClient(llm).Chat(ctx, system, user, nil)
 }

@@ -1,8 +1,8 @@
 // Package knowledge accumulates the facts a tool-using inspection agent has
 // gathered into a single deduplicated structure that is re-rendered into the
-// LLM context on every turn. It replaces AgenticGoKit's single-step relay loop,
-// which discarded every tool result older than one turn and so left the agent
-// with no working memory.
+// LLM context on every turn. It gives the agent durable working memory: rather
+// than a single-step relay loop that would discard every tool result older than
+// one turn, every fact gathered is preserved and re-presented each turn.
 //
 // Conceptually the store is a tree of facts. Two kinds are tracked:
 //

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gilbertr/testdiag/internal/jenkins"
-	"github.com/gilbertr/testdiag/internal/workspace"
+	"github.com/gilramir/testdiag/internal/jenkins"
+	"github.com/gilramir/testdiag/internal/workspace"
 )
 
 func TestDownloadStageWritesLog(t *testing.T) {

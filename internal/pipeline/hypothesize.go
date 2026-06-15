@@ -8,11 +8,11 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/gilbertr/testdiag/internal/config"
-	"github.com/gilbertr/testdiag/internal/failmode"
-	"github.com/gilbertr/testdiag/internal/inspect"
-	"github.com/gilbertr/testdiag/internal/jenkins"
-	"github.com/gilbertr/testdiag/internal/workspace"
+	"github.com/gilramir/testdiag/internal/config"
+	"github.com/gilramir/testdiag/internal/failmode"
+	"github.com/gilramir/testdiag/internal/inspect"
+	"github.com/gilramir/testdiag/internal/jenkins"
+	"github.com/gilramir/testdiag/internal/workspace"
 )
 
 // hypothesizeStage reads the LOGPARSE brief and the optional architecture

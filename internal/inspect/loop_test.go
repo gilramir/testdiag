@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gilbertr/testdiag/internal/tools"
-	"github.com/gilbertr/testdiag/internal/workspace"
+	"github.com/gilramir/testdiag/internal/tools"
+	"github.com/gilramir/testdiag/internal/workspace"
 )
 
 // scriptedClient returns a canned response per turn and records the user

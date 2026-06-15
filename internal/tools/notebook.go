@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/gilbertr/testdiag/internal/workspace"
+	"github.com/gilramir/testdiag/internal/workspace"
 )
 
 // Caps for the notebook so a runaway agent can't fill the context window by

@@ -1,9 +1,7 @@
-module github.com/gilbertr/testdiag
+module github.com/gilramir/testdiag
 
 go 1.24.1
 
-// AgenticGoKit is fetched as a normal module dependency. The ./AgenticGoKit
-// clone in this tree is only a local copy for reference and is git-ignored.
 require github.com/BurntSushi/toml v1.5.0
 
 require (

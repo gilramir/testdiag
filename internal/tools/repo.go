@@ -15,7 +15,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/gilbertr/testdiag/internal/workspace"
+	"github.com/gilramir/testdiag/internal/workspace"
 )
 
 // Caps for the tree-walking tools. They protect both the context window and the

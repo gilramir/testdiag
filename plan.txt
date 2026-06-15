@@ -1,6 +1,6 @@
-Build a CLI tool that uses LLMS, in Go, using AgenticGoKit.
-A copy of AgenticGoKit is cloned into the AgenticGoKit/ directory.
-It is not part of this repo.
+Build a CLI tool that uses LLMS, in Go. All LLM interaction is hand-rolled
+against an OpenAI-compatible endpoint (see internal/inspect); there is no
+agent framework dependency.
 
 We won't run this, but only create the program as best we can, and leave place
 holders where needed.

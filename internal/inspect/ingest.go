@@ -6,9 +6,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/gilbertr/testdiag/internal/knowledge"
-	"github.com/gilbertr/testdiag/internal/toolproto"
-	"github.com/gilbertr/testdiag/internal/tools"
+	"github.com/gilramir/testdiag/internal/knowledge"
+	"github.com/gilramir/testdiag/internal/toolproto"
+	"github.com/gilramir/testdiag/internal/tools"
 )
 
 // ingest folds the result of one tool call into the knowledge store. Each

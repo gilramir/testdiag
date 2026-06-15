@@ -4,17 +4,16 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gilbertr/testdiag/internal/failmode"
+	"github.com/gilramir/testdiag/internal/failmode"
 )
 
 // buildSystemPrompt assembles the DEEPINSPECT system prompt. EVERYTHING the
 // agent must not forget goes here — the failure-mode framing, the tool rules,
 // the output contract, the brief, the hypothesis, the inspection plan, the
-// mapped source file, and the tool budget — because AGK's continuation loop
-// preserves the System message across every tool iteration but replaces the
-// User message with "Previous response + tool results" after the first
-// round-trip. Anything left only in the user message is gone after the first
-// tool call.
+// mapped source file, and the tool budget — because the inspect engine sends a
+// static System message every turn but rebuilds the User message from the
+// freshly-rendered knowledge tree each round. Anything the agent must not forget
+// belongs in the System prompt.
 func buildSystemPrompt(m failmode.Mode, brief, hypothesis, plan, sourceFile string, maxToolIterations int) string {
 	var b strings.Builder
 
@@ -97,7 +96,7 @@ OPTIONAL — include this section ONLY if you found a strong, evidence-backed ro
 
 // buildUserPrompt assembles the first user message for one DEEPINSPECT attempt.
 // The brief, hypothesis, plan, and mapped source file live in the SYSTEM prompt
-// (so they survive AGK's continuation loop); this message carries the task
+// (so they persist across every turn of the tool loop); this message carries the task
 // framing, prior-attempt feedback on a retry, and project context.
 func buildUserPrompt(input DiagnoseInput, background, memory string) string {
 	var b strings.Builder

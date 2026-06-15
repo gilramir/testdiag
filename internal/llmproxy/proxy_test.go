@@ -42,7 +42,7 @@ func TestProxyRoundTrip(t *testing.T) {
 	}
 	defer px.Close()
 
-	// Mimic what AgenticGoKit's OpenAI adapter does: POST BaseURL+/chat/completions.
+	// Mimic what an OpenAI client does: POST BaseURL+/chat/completions.
 	resp, err := http.Post(px.BaseURL()+"/chat/completions", "application/json",
 		strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`))
 	if err != nil {
@@ -74,7 +74,7 @@ func TestProxyRoundTrip(t *testing.T) {
 	}
 }
 
-// TestScrubContinuationNudge verifies the proxy rewrites AgenticGoKit's
+// TestScrubContinuationNudge verifies the proxy rewrites a
 // "Do NOT make additional tool calls" nudge out of an outgoing request so it
 // never reaches the model.
 func TestScrubContinuationNudge(t *testing.T) {

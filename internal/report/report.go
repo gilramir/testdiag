@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gilbertr/testdiag/internal/pipeline"
+	"github.com/gilramir/testdiag/internal/pipeline"
 )
 
 // Write writes a single diagnosis as a Markdown file under outDir and returns

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gilbertr/testdiag/internal/workspace"
+	"github.com/gilramir/testdiag/internal/workspace"
 )
 
 const (
