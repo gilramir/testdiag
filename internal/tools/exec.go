@@ -35,9 +35,9 @@ var interpreters = map[string][]string{
 }
 
 // Confirmer asks the operator to approve running a script, returning true to
-// proceed. The script body and language are passed so the UI can show exactly
-// what will run.
-type Confirmer func(language, script string) bool
+// proceed. The script body, language, and optional description are passed so
+// the UI can show exactly what will run.
+type Confirmer func(language, script, description string) bool
 
 var (
 	confirmMu sync.Mutex
@@ -77,8 +77,11 @@ func SetStdinReader(fn func() string) {
 // interactiveConfirm shows the script on stderr and reads a 1 (yes) / 2 (no)
 // answer via stdinLineFn. Anything other than "1" is treated as a decline, so
 // an EOF or a stray keystroke fails safe.
-func interactiveConfirm(language, script string) bool {
+func interactiveConfirm(language, script, description string) bool {
 	fmt.Fprintf(os.Stderr, "\n┌─ The agent wants to run a %s script ─────────────────────────\n", language)
+	if description != "" {
+		fmt.Fprintf(os.Stderr, "│ Purpose: %s\n│\n", description)
+	}
 	for _, line := range strings.Split(strings.TrimRight(script, "\n"), "\n") {
 		fmt.Fprintf(os.Stderr, "│ %s\n", line)
 	}
@@ -157,10 +160,12 @@ func (t *runScriptTool) Execute(ctx context.Context, args map[string]interface{}
 	// Ask the operator. The lock guards confirmFn against a concurrent
 	// SetConfirmer and serializes the prompt should the tool ever be called
 	// from more than one goroutine.
+	description, _ := strArg(args, "description")
+
 	confirmMu.Lock()
 	confirm := confirmFn
 	confirmMu.Unlock()
-	approved := confirm(strings.ToLower(language), script)
+	approved := confirm(strings.ToLower(language), script, description)
 	if !approved {
 		return ok(map[string]interface{}{
 			"approved": false,

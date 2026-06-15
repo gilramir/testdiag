@@ -522,7 +522,7 @@ func withConfirmer(t *testing.T, c Confirmer) {
 
 func TestRunScriptApprovedShell(t *testing.T) {
 	ws, _ := setupWS(t)
-	withConfirmer(t, func(language, script string) bool { return true })
+	withConfirmer(t, func(language, script, description string) bool { return true })
 
 	tool := &runScriptTool{ws: ws}
 	res, err := tool.Execute(context.Background(), map[string]interface{}{
@@ -549,7 +549,7 @@ func TestRunScriptApprovedShell(t *testing.T) {
 
 func TestRunScriptRunsInWorkspace(t *testing.T) {
 	ws, root := setupWS(t)
-	withConfirmer(t, func(language, script string) bool { return true })
+	withConfirmer(t, func(language, script, description string) bool { return true })
 
 	tool := &runScriptTool{ws: ws}
 	res, err := tool.Execute(context.Background(), map[string]interface{}{
@@ -569,7 +569,7 @@ func TestRunScriptRunsInWorkspace(t *testing.T) {
 
 func TestRunScriptDeclinedDoesNotRun(t *testing.T) {
 	ws, _ := setupWS(t)
-	withConfirmer(t, func(language, script string) bool { return false })
+	withConfirmer(t, func(language, script, description string) bool { return false })
 
 	tool := &runScriptTool{ws: ws}
 	res, err := tool.Execute(context.Background(), map[string]interface{}{
@@ -594,7 +594,7 @@ func TestRunScriptDeclinedDoesNotRun(t *testing.T) {
 
 func TestRunScriptUnsupportedLanguage(t *testing.T) {
 	ws, _ := setupWS(t)
-	withConfirmer(t, func(language, script string) bool {
+	withConfirmer(t, func(language, script, description string) bool {
 		t.Fatal("confirmer must not be called for an unsupported language")
 		return false
 	})
