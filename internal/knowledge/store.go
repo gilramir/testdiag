@@ -15,8 +15,8 @@
 //     file_exists / git tools, keyed by the canonical (tool, params) pair so a
 //     repeated query is a no-op merge rather than duplicated noise.
 //
-// Render produces the Markdown the LLM sees; JSON produces a faithful debug
-// dump. When the rendered Markdown would exceed the configured character
+// Render produces the TOON document the LLM sees; JSON produces a faithful
+// debug dump. When the rendered TOON would exceed the configured character
 // budget, least-recently-referenced facts are evicted: file line-text is elided
 // first (keeping the interval index), then whole records are dropped.
 package knowledge
@@ -222,7 +222,7 @@ func newEvictState() *evictState {
 	return &evictState{elided: map[string]bool{}, dropped: map[string]bool{}}
 }
 
-// Render returns the Markdown view, evicting least-recently-referenced facts to
+// Render returns the TOON view, evicting least-recently-referenced facts to
 // stay within the character budget.
 func (s *Store) Render() string {
 	st := newEvictState()
@@ -256,33 +256,33 @@ func (s *Store) Render() string {
 func (s *Store) render(st *evictState) string {
 	var b strings.Builder
 
-	var fileBlocks []string
+	var files []*fileRecord
 	for _, f := range s.files {
-		if st.dropped["F:"+f.Path] {
-			continue
+		if !st.dropped["F:"+f.Path] {
+			files = append(files, f)
 		}
-		fileBlocks = append(fileBlocks, s.renderFile(f, st.elided[f.Path]))
 	}
-	if len(fileBlocks) > 0 {
-		b.WriteString("## Files examined\n\n")
-		b.WriteString(strings.Join(fileBlocks, "\n"))
-		b.WriteString("\n")
+	if len(files) > 0 {
+		fmt.Fprintf(&b, "files[%d]:\n", len(files))
+		for _, f := range files {
+			b.WriteString(s.renderFile(f, st.elided[f.Path]))
+		}
 	}
 
-	var searchBlocks []string
+	var searches []*searchRecord
 	for _, r := range s.searches {
-		if st.dropped["S:"+r.Tool+"\x00"+r.Params] {
-			continue
+		if !st.dropped["S:"+r.Tool+"\x00"+r.Params] {
+			searches = append(searches, r)
 		}
-		searchBlocks = append(searchBlocks, s.renderSearch(r))
 	}
-	if len(searchBlocks) > 0 {
+	if len(searches) > 0 {
 		if b.Len() > 0 {
-			b.WriteString("\n")
+			b.WriteByte('\n')
 		}
-		b.WriteString("## Searches and lookups\n\n")
-		b.WriteString(strings.Join(searchBlocks, "\n"))
-		b.WriteString("\n")
+		fmt.Fprintf(&b, "searches[%d]:\n", len(searches))
+		for _, r := range searches {
+			b.WriteString(s.renderSearch(r))
+		}
 	}
 
 	return strings.TrimRight(b.String(), "\n")
@@ -290,18 +290,17 @@ func (s *Store) render(st *evictState) string {
 
 func (s *Store) renderFile(f *fileRecord, elide bool) string {
 	var b strings.Builder
-	header := "### " + f.Path
+	fmt.Fprintf(&b, "  - path: %s\n", f.Path)
 	if f.Note != "" {
-		header += " (" + f.Note + ")"
+		fmt.Fprintf(&b, "    note: %s\n", f.Note)
 	}
-	b.WriteString(header + "\n")
 
 	if f.NotFound {
-		b.WriteString("- NOT FOUND\n")
+		b.WriteString("    not_found: true\n")
 		return b.String()
 	}
 	if len(f.Lines) == 0 {
-		b.WriteString("- (referenced; no content read yet)\n")
+		b.WriteString("    (referenced; no content read yet)\n")
 		return b.String()
 	}
 
@@ -312,14 +311,14 @@ func (s *Store) renderFile(f *fileRecord, elide bool) string {
 	runs := contiguousRuns(nums)
 
 	if elide {
-		fmt.Fprintf(&b, "- known lines %s (content elided to save space)\n", rangeLabel(runs))
+		fmt.Fprintf(&b, "    content_elided: known lines %s\n", rangeLabel(runs))
 		return b.String()
 	}
 
 	for _, run := range runs {
-		fmt.Fprintf(&b, "- lines %s:\n", rangeLabel([][2]int{run}))
+		fmt.Fprintf(&b, "    lines %s:\n", rangeLabel([][2]int{run}))
 		for n := run[0]; n <= run[1]; n++ {
-			fmt.Fprintf(&b, "    %d  %s\n", n, f.Lines[n])
+			fmt.Fprintf(&b, "      %d: %s\n", n, f.Lines[n])
 		}
 	}
 	return b.String()
@@ -327,20 +326,21 @@ func (s *Store) renderFile(f *fileRecord, elide bool) string {
 
 func (s *Store) renderSearch(r *searchRecord) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "### %s %s\n", r.Tool, r.Params)
+	fmt.Fprintf(&b, "  - tool: %s\n    params: %s\n", r.Tool, r.Params)
+	if r.Note != "" {
+		fmt.Fprintf(&b, "    note: %s\n", r.Note)
+	}
 	if len(r.Results) == 0 {
-		note := r.Note
-		if note == "" {
-			note = "no results"
-		}
-		fmt.Fprintf(&b, "- %s\n", note)
 		return b.String()
 	}
-	if r.Note != "" {
-		fmt.Fprintf(&b, "- %s\n", r.Note)
-	}
-	for _, res := range r.Results {
-		fmt.Fprintf(&b, "- %s\n", res)
+	inline := strings.Join(r.Results, ", ")
+	if len(inline) <= 120 {
+		fmt.Fprintf(&b, "    results[%d]: %s\n", len(r.Results), inline)
+	} else {
+		fmt.Fprintf(&b, "    results[%d]:\n", len(r.Results))
+		for _, res := range r.Results {
+			fmt.Fprintf(&b, "      %s\n", res)
+		}
 	}
 	return b.String()
 }

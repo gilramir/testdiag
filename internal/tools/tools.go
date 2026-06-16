@@ -20,6 +20,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	toon "github.com/toon-format/toon-go"
+
 	"github.com/gilramir/testdiag/internal/workspace"
 )
 
@@ -310,14 +312,14 @@ func logFullResult(name string, args map[string]interface{}, res *Result, err er
 }
 
 // fullValue renders a tool result value in full, without truncation: strings
-// verbatim, everything else as indented JSON (falling back to %v if it cannot be
-// marshaled). Unlike summarizeValue it never elides content.
+// verbatim, everything else as TOON (falling back to %v if marshaling fails).
+// Unlike summarizeValue it never elides content.
 func fullValue(v interface{}) string {
 	if s, ok := v.(string); ok {
 		return s
 	}
-	if out, err := json.MarshalIndent(v, "", "  "); err == nil {
-		return string(out)
+	if out, err := toon.MarshalString(v); err == nil {
+		return out
 	}
 	return fmt.Sprintf("%v", v)
 }

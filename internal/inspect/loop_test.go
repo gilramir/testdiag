@@ -119,8 +119,8 @@ func TestEngineRecordsNotFound(t *testing.T) {
 	}}
 	eng := newEngineWithClient(client, Options{MaxIterations: 5, Schemas: tools.Schemas()})
 	res, _ := eng.Run(context.Background(), RunInput{System: "s", Task: "t"})
-	if !strings.Contains(res.Store.Render(), "NOT FOUND") {
-		t.Errorf("expected ghost.go recorded NOT FOUND:\n%s", res.Store.Render())
+	if !strings.Contains(res.Store.Render(), "not_found: true") {
+		t.Errorf("expected ghost.go recorded not_found:\n%s", res.Store.Render())
 	}
 }
 

@@ -20,7 +20,7 @@ func TestCoalesceLineIntervals(t *testing.T) {
 	if !strings.Contains(out, "lines 50-60:") {
 		t.Errorf("expected run 50-60, got:\n%s", out)
 	}
-	if strings.Contains(out, "lines 10-20") || strings.Contains(out, "lines 20-30") {
+	if strings.Contains(out, "lines 10-20:") || strings.Contains(out, "lines 20-30:") {
 		t.Errorf("intervals not coalesced:\n%s", out)
 	}
 }
@@ -52,7 +52,7 @@ func TestNotFoundMarker(t *testing.T) {
 	s := New(0)
 	s.MarkNotFound("ghost.go")
 	out := s.Render()
-	if !strings.Contains(out, "### ghost.go") || !strings.Contains(out, "NOT FOUND") {
+	if !strings.Contains(out, "path: ghost.go") || !strings.Contains(out, "not_found: true") {
 		t.Errorf("expected not-found marker, got:\n%s", out)
 	}
 	// A later successful read clears the marker.
@@ -60,7 +60,7 @@ func TestNotFoundMarker(t *testing.T) {
 		t.Error("reading a previously-not-found file should report a change")
 	}
 	out = s.Render()
-	if strings.Contains(out, "NOT FOUND") {
+	if strings.Contains(out, "not_found: true") {
 		t.Errorf("not-found marker should be cleared after a read:\n%s", out)
 	}
 }
@@ -69,7 +69,7 @@ func TestSearchNoResults(t *testing.T) {
 	s := New(0)
 	s.SetSearchNote("find_files", "*.race", "no matches")
 	out := s.Render()
-	if !strings.Contains(out, "find_files *.race") || !strings.Contains(out, "no matches") {
+	if !strings.Contains(out, "tool: find_files") || !strings.Contains(out, "params: *.race") || !strings.Contains(out, "no matches") {
 		t.Errorf("expected no-match note, got:\n%s", out)
 	}
 }
@@ -86,7 +86,7 @@ func TestEvictionElidesThenDrops(t *testing.T) {
 	if len(out) > len(fullOut)/2 {
 		t.Errorf("rendered output %d exceeds budget %d:\n%s", len(out), len(fullOut)/2, out)
 	}
-	if !strings.Contains(out, "content elided") && !strings.Contains(out, "###") {
+	if !strings.Contains(out, "content_elided") && !strings.Contains(out, "path:") {
 		t.Errorf("expected elision or partial content under budget, got:\n%s", out)
 	}
 
@@ -112,8 +112,8 @@ func TestEvictionKeepsRecentFacts(t *testing.T) {
 
 	// old.go is least-recently-touched, so its content should be elided first
 	// while recent.go keeps real content.
-	oldElided := strings.Contains(out, "### old.go") &&
-		strings.Contains(afterHeader(out, "### old.go"), "content elided")
+	oldElided := strings.Contains(out, "path: old.go") &&
+		strings.Contains(afterEntry(out, "path: old.go"), "content_elided")
 	if !oldElided {
 		t.Errorf("expected old.go to be elided first:\n%s", out)
 	}
@@ -136,13 +136,13 @@ func TestEvictionByCreationNotModification(t *testing.T) {
 	capped.AddLines("old.go", 41, mkLines(41, 80))
 	out := capped.Render()
 
-	oldElided := strings.Contains(out, "### old.go") &&
-		strings.Contains(afterHeader(out, "### old.go"), "content elided")
+	oldElided := strings.Contains(out, "path: old.go") &&
+		strings.Contains(afterEntry(out, "path: old.go"), "content_elided")
 	if !oldElided {
 		t.Errorf("expected old.go (oldest created) to be elided first despite recent write:\n%s", out)
 	}
-	newKept := strings.Contains(out, "### new.go") &&
-		!strings.Contains(afterHeader(out, "### new.go"), "content elided")
+	newKept := strings.Contains(out, "path: new.go") &&
+		!strings.Contains(afterEntry(out, "path: new.go"), "content_elided")
 	if !newKept {
 		t.Errorf("expected new.go (newer created) to keep its content:\n%s", out)
 	}
@@ -182,13 +182,15 @@ func addBig(s *Store) {
 	s.AddSearch("search_repo", `"lock"`, []string{"a.go:1", "b.go:2", "c.go:3"})
 }
 
-func afterHeader(s, header string) string {
-	i := strings.Index(s, header)
+// afterEntry returns the text following the first occurrence of marker up to
+// the next TOON file entry ("  - path:") or end of string.
+func afterEntry(s, marker string) string {
+	i := strings.Index(s, marker)
 	if i < 0 {
 		return ""
 	}
-	rest := s[i+len(header):]
-	if j := strings.Index(rest, "### "); j >= 0 {
+	rest := s[i+len(marker):]
+	if j := strings.Index(rest, "  - path:"); j >= 0 {
 		return rest[:j]
 	}
 	return rest
