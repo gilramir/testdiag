@@ -134,15 +134,16 @@ Output nothing else.`
 // setGoalsFeedbackPrompt is the criteria for a SETGOALS output.
 const setGoalsFeedbackPrompt = `You are reviewing a step-by-step inspection goal list produced by the SETGOALS stage. The list will drive a deep-inspection agent (DEEPINSPECT) that reads workspace source files to confirm or refute ONE specific hypothesis about a failing test.
 
-A good goal list must satisfy ALL FIVE criteria:
+A good goal list must satisfy ALL SIX criteria:
 1. Contains an "## Inspection Goals" section that is an ORDERED (numbered) list of at least two concrete steps.
-2. Each step names a specific workspace file (and, where possible, a symbol or line region) — not vague prose like "look at the relevant code." When an inspection plan was provided, the files should come from it.
-3. Each step states WHAT to look for in that file and ties it to the hypothesis.
-4. Each step specifies BOTH what it means if the thing IS found AND what to do if it is NOT found (a fallback or next step).
-5. Steps are ordered most-decisive-first and cover both sides of the hypothesis boundary, and the list ends with a "## Verdict Criteria" note defining what evidence justifies CONFIRMED vs REFUTED vs INCONCLUSIVE.
+2. Goal 1 directs DEEPINSPECT to read the file(s) that define expected behavior — an interface, entry point, test, or core logic path — and establish what correct operation looks like for the condition the hypothesis turns on. A goal 1 that jumps straight to looking for a defect without first establishing expected behavior fails this criterion.
+3. Each step names a specific workspace file (and, where possible, a symbol or line region) — not vague prose like "look at the relevant code." When an inspection plan was provided, the files should come from it.
+4. Each step states WHAT to look for in that file and ties it to the hypothesis.
+5. Each step specifies BOTH what it means if the thing IS found AND what to do if it is NOT found (a fallback or next step).
+6. Steps are ordered most-decisive-first and cover both sides of the hypothesis boundary, and the list ends with a "## Verdict Criteria" note defining what evidence justifies CONFIRMED vs REFUTED vs INCONCLUSIVE.
 
 Respond with EXACTLY ONE of:
-- The single word APPROVED if all five criteria are met, OR
+- The single word APPROVED if all six criteria are met, OR
 - NEEDS REVISION: followed by a concise bulleted list of exactly what is missing or unclear.
 
 Output nothing else.`
