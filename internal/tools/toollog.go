@@ -11,6 +11,7 @@ import (
 // summary of the response (no full content strings).
 type ToolCall struct {
 	Name          string
+	Reason        string // why the model called this tool (from the "reason" field)
 	Args          map[string]interface{}
 	ResultSummary string // compact description of the response fields
 	Failed        bool
@@ -54,7 +55,7 @@ func PeekToolLog() []ToolCall {
 }
 
 // appendToolCall records one completed tool invocation.
-func appendToolCall(name string, args map[string]interface{}, content interface{}, failed bool) {
+func appendToolCall(name string, args map[string]interface{}, reason string, content interface{}, failed bool) {
 	var summary string
 	if failed {
 		summary = fmt.Sprintf("%v", content)
@@ -64,6 +65,7 @@ func appendToolCall(name string, args map[string]interface{}, content interface{
 	toolLogMu.Lock()
 	toolLogCalls = append(toolLogCalls, ToolCall{
 		Name:          name,
+		Reason:        reason,
 		Args:          args,
 		ResultSummary: summary,
 		Failed:        failed,
@@ -80,6 +82,9 @@ func FormatToolLog(calls []ToolCall) string {
 	var b strings.Builder
 	for i, c := range calls {
 		fmt.Fprintf(&b, "## Call %d: %s\n\n", i+1, c.Name)
+		if c.Reason != "" {
+			fmt.Fprintf(&b, "**Reason:** %s\n\n", c.Reason)
+		}
 		if len(c.Args) > 0 {
 			keys := make([]string, 0, len(c.Args))
 			for k := range c.Args {

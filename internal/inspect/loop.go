@@ -108,7 +108,7 @@ func (e *Engine) Run(ctx context.Context, in RunInput) (Result, error) {
 		}
 		for _, c := range calls {
 			called.add(c.Name)
-			res, execErr := tools.Execute(ctx, c.Name, c.Args)
+			res, execErr := tools.Execute(ctx, c.Name, c.Args, c.Reason)
 			ingest(store, c, res, execErr)
 		}
 	}
@@ -182,7 +182,8 @@ func buildTurnPrompt(task string, store *knowledge.Store, iter, maxIter int, sch
 	b.WriteString("1. If the facts above are sufficient, write your final analysis now in the required format and call no tools.\n")
 	b.WriteString("2. Otherwise, call one or more tools to gather the specific evidence you still need.\n\n")
 	b.WriteString("To call a tool, emit it on its own line as:\n")
-	b.WriteString("`TOOL_CALL{\"name\":\"<tool>\",\"args\":{...}}`\n\n")
+	b.WriteString("`TOOL_CALL{\"name\":\"<tool>\",\"reason\":\"<one sentence: why you need this call right now>\",\"args\":{...}}`\n\n")
+	b.WriteString("The `reason` field is required: state in one sentence what specific question this call will answer.\n\n")
 	b.WriteString("Do NOT re-request anything already shown above — those results will not change. ")
 	b.WriteString("Build on what you know; investigate files and symbols you have not yet examined.\n")
 	if len(schemas) > 0 {

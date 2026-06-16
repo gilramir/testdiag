@@ -157,10 +157,12 @@ func Register(ws *workspace.Workspace) []string {
 var registry map[string]*loggingTool
 
 // Execute runs the named workspace tool with args, going through the same
-// logging/loop-guard wrapper for every call. It returns an error if the tool
-// name is unknown or Register has not been called. Log tools that are disabled
-// via SetLogToolsEnabled return their refusal result as usual.
-func Execute(ctx context.Context, name string, args map[string]interface{}) (*Result, error) {
+// logging/loop-guard wrapper for every call. reason is the model's stated
+// rationale for the call; it is recorded in the tool log and displayed in -v
+// mode. It returns an error if the tool name is unknown or Register has not
+// been called. Log tools that are disabled via SetLogToolsEnabled return their
+// refusal result as usual.
+func Execute(ctx context.Context, name string, args map[string]interface{}, reason string) (*Result, error) {
 	if registry == nil {
 		return nil, fmt.Errorf("tools.Execute: Register has not been called")
 	}
@@ -168,7 +170,19 @@ func Execute(ctx context.Context, name string, args map[string]interface{}) (*Re
 	if !ok {
 		return nil, fmt.Errorf("unknown tool %q", name)
 	}
-	return t.Execute(ctx, args)
+	if reason != "" && verbose.Load() {
+		fmt.Fprintf(os.Stderr, "[tool] %s: %s\n", name, reason)
+	}
+	res, err := t.Execute(ctx, args)
+	if res != nil {
+		appendToolCall(name, args, reason, res.Content, !res.Success)
+	} else if err != nil {
+		appendToolCall(name, args, reason, err.Error(), true)
+	}
+	if debug.Load() {
+		logFullResult(name, args, res, err)
+	}
+	return res, err
 }
 
 // Has reports whether a tool with the given name is registered.
@@ -274,24 +288,13 @@ func (t *loggingTool) Execute(ctx context.Context, args map[string]interface{}) 
 		}
 	}
 
-	var res *Result
-	var err error
 	if !verbose.Load() {
-		res, err = t.inner.Execute(ctx, args)
-	} else {
-		vlogf("%s start: %s", name, briefArgs(args))
-		start := time.Now()
-		res, err = t.inner.Execute(ctx, args)
-		vlogf("%s done in %s%s", name, time.Since(start).Round(time.Millisecond), outcome(res, err))
+		return t.inner.Execute(ctx, args)
 	}
-	if res != nil {
-		appendToolCall(name, args, res.Content, !res.Success)
-	} else if err != nil {
-		appendToolCall(name, args, err.Error(), true)
-	}
-	if debug.Load() {
-		logFullResult(name, args, res, err)
-	}
+	vlogf("%s start: %s", name, briefArgs(args))
+	start := time.Now()
+	res, err := t.inner.Execute(ctx, args)
+	vlogf("%s done in %s%s", name, time.Since(start).Round(time.Millisecond), outcome(res, err))
 	return res, err
 }
 

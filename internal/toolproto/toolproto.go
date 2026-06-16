@@ -30,8 +30,9 @@ import (
 
 // Call is a normalized tool invocation.
 type Call struct {
-	Name string
-	Args map[string]interface{}
+	Name   string
+	Reason string // why the model is making this call (optional, from the "reason" field)
+	Args   map[string]interface{}
 }
 
 // Render returns the canonical TOOL_CALL text form for one call.
@@ -41,9 +42,10 @@ func (c Call) Render() string {
 		args = map[string]interface{}{}
 	}
 	b, _ := json.Marshal(struct {
-		Name string                 `json:"name"`
-		Args map[string]interface{} `json:"args"`
-	}{c.Name, args})
+		Name   string                 `json:"name"`
+		Reason string                 `json:"reason,omitempty"`
+		Args   map[string]interface{} `json:"args"`
+	}{c.Name, c.Reason, args})
 	return "TOOL_CALL" + string(b)
 }
 
@@ -478,6 +480,8 @@ func callFromMap(m map[string]interface{}) (Call, bool) {
 		return Call{}, false
 	}
 
+	reason, _ := m["reason"].(string)
+
 	var args map[string]interface{}
 	for _, k := range []string{"arguments", "args", "parameters"} {
 		switch v := m[k].(type) {
@@ -493,7 +497,7 @@ func callFromMap(m map[string]interface{}) (Call, bool) {
 	if args == nil {
 		args = map[string]interface{}{}
 	}
-	return Call{Name: name, Args: args}, true
+	return Call{Name: name, Reason: reason, Args: args}, true
 }
 
 func callsFromArray(arr []interface{}) []Call {
