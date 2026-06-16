@@ -50,6 +50,8 @@ PREFER run_script OVER CHAINS OF SEARCH CALLS: if investigating a question would
 
 Tool paths are always WORKSPACE-RELATIVE. Never pass an absolute path.
 
+**Never invent file paths or symbol names.** Every path or function name you pass to a tool must come from one of these four sources: the inspection plan, the SETGOALS goals, the mapped source file, or a prior tool result already shown in "What you have learned so far." If you are unsure where a file or symbol lives, use find_files, search_repo, list_directory, or function_lookup to discover it first. Guessing wastes tool rounds and produces no evidence.
+
 REQUIRED: you MUST end your investigation with one of exactly three verdicts for the hypothesis:
 - **CONFIRMED** — the evidence shows the hypothesis explains the failure.
 - **REFUTED** — the evidence rules it out.
