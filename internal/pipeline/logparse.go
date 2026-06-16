@@ -28,6 +28,7 @@ type logParseStage struct {
 	ws           *workspace.Workspace
 	llm          config.LLMSpec
 	mode         failmode.Mode
+	archDocPath  string           // workspace-relative; may be empty
 	feedback     *feedbackChecker // nil when feedback is disabled
 	maxFeedbacks int
 	verbose      bool
@@ -37,14 +38,15 @@ type logParseStage struct {
 // newLogParseStage constructs the stage. fb is nil when feedback is disabled
 // (maxFeedbacks=0 or no feedback LLM configured); both are set together by
 // pipeline.New before calling this.
-func newLogParseStage(ws *workspace.Workspace, llm config.LLMSpec, mode failmode.Mode, fb *feedbackChecker, maxFeedbacks int, verbose bool, pauseFn func()) *logParseStage {
-	return &logParseStage{ws: ws, llm: llm, mode: mode, feedback: fb, maxFeedbacks: maxFeedbacks, verbose: verbose, pauseFn: pauseFn}
+func newLogParseStage(ws *workspace.Workspace, llm config.LLMSpec, mode failmode.Mode, archDocPath string, fb *feedbackChecker, maxFeedbacks int, verbose bool, pauseFn func()) *logParseStage {
+	return &logParseStage{ws: ws, llm: llm, mode: mode, archDocPath: archDocPath, feedback: fb, maxFeedbacks: maxFeedbacks, verbose: verbose, pauseFn: pauseFn}
 }
 
 func (s *logParseStage) Name() State { return StateLogParse }
 
 func (s *logParseStage) Run(ctx context.Context, sc *Context) error {
 	logText := s.logForPrompt(combinedLog(sc.Test))
+	archDoc := s.readArchDoc()
 
 	var (
 		prevBrief string
@@ -54,9 +56,9 @@ func (s *logParseStage) Run(ctx context.Context, sc *Context) error {
 		stageBanner(s.verbose, string(s.Name()), feedbacks+1)
 		var prompt string
 		if critique == "" {
-			prompt = buildLogParsePrompt(sc.Test, logText)
+			prompt = buildLogParsePrompt(sc.Test, logText, archDoc)
 		} else {
-			prompt = buildLogParseRetryPrompt(sc.Test, logText, prevBrief, critique)
+			prompt = buildLogParseRetryPrompt(sc.Test, logText, archDoc, prevBrief, critique)
 		}
 		content, err := inspect.Complete(ctx, s.llm, buildLogParseSystemPrompt(s.mode), prompt)
 		if err != nil {
@@ -110,6 +112,20 @@ func (s *logParseStage) saveBrief(sc *Context, brief string) error {
 		s.pauseFn()
 	}
 	return nil
+}
+
+// readArchDoc reads the architecture document from the workspace if configured
+// and the file exists. Returns empty string on any error (treated as optional).
+func (s *logParseStage) readArchDoc() string {
+	if s.archDocPath == "" {
+		return ""
+	}
+	abs := filepath.Join(s.ws.Root(), s.archDocPath)
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 // ensureTestFile appends the test's class name to the brief when the brief does
@@ -215,7 +231,7 @@ func buildLogParseSystemPrompt(m failmode.Mode) string {
 		conditionsHeading = "## Conditions To Check"
 		conditionsBody = "A ranked bulleted list of the deterministic defects that could explain a failure on every run, each tied to the log evidence that suggests it."
 	}
-	return fmt.Sprintf(`You are a CI log analyst. You are given the raw failure log of ONE automated test. %s You do NOT have access to the source code and you must NOT guess at fixes.
+	return fmt.Sprintf(`You are a CI log analyst. You are given the raw failure log of ONE automated test, and optionally an architecture document describing the system under test (SUT). %s You do NOT have access to the source code and you must NOT guess at fixes.
 
 Your ONLY job is to read the log and produce a concise INVESTIGATION BRIEF that a second engineer — who will NOT see this log, only your brief — can use to go straight into the source code and find the root cause. Extract leads, name names, and point at where to look.
 
@@ -225,12 +241,15 @@ Work from the log only:
 - Find the FIRST genuine error / assertion / exception / timeout, not the downstream noise it caused.
 - Pull out the concrete identifiers the next stage will need to locate code: file paths, class/function/method names, modules, error messages, log tags, ports, RPC/endpoint names, thread or process names — quote them verbatim from the log.
 - %s Hypothesize what could explain the failure as %s. Tie each hypothesis to specific evidence in the log (a line, a timestamp gap, an ordering, a stack frame).
+- Separate what the TEST FRAMEWORK observed (assertion messages, setup/teardown output, harness errors) from what the SYSTEM UNDER TEST did (SUT stack frames, SUT log output, SUT error messages, values the SUT returned). If an architecture document is provided, use its module names, package prefixes, and component names to identify SUT-originated lines in the log.
 
 Output ONLY Markdown with exactly these sections (no preamble, no code fixes):
 ## First Real Error
 The earliest genuine failure, quoted, with the log location/context that identifies it.
+## SUT-Side Observations
+Stack frames, log lines, error messages, and values that originated in the system under test rather than the test framework or harness. Use the architecture document (if provided) to distinguish SUT output from test-framework output. If the root cause may lie in the test itself (wrong assertion, bad setup, test-framework bug) rather than the SUT, say so explicitly here.
 ## Source/Logic To Find
-A bulleted list of the specific files, symbols, and call paths the next stage should open, each with WHY (what to confirm there). Use the exact identifiers from the log.
+A bulleted list of the specific files, symbols, and call paths the next stage should open, each with WHY (what to confirm there). Include both SUT and test-side candidates when both are plausible. Use the exact identifiers from the log.
 %s
 %s
 ## Notes For Next Stage
@@ -239,7 +258,7 @@ Anything else useful: ambiguities, multiple candidate errors, what would confirm
 }
 
 // buildLogParsePrompt assembles the single user message for the LOGPARSE pass.
-func buildLogParsePrompt(test jenkins.FailedTest, logExcerpt string) string {
+func buildLogParsePrompt(test jenkins.FailedTest, logExcerpt, archDoc string) string {
 	var b strings.Builder
 	b.WriteString("Produce the investigation brief for this failing test.\n\n")
 	b.WriteString("## Failing test\n")
@@ -248,6 +267,12 @@ func buildLogParsePrompt(test jenkins.FailedTest, logExcerpt string) string {
 		fmt.Fprintf(&b, "- Status: %s\n", test.Status)
 	}
 	b.WriteString("\n")
+
+	if strings.TrimSpace(archDoc) != "" {
+		b.WriteString("## Architecture document\n")
+		b.WriteString(strings.TrimSpace(archDoc))
+		b.WriteString("\n\n")
+	}
 
 	if strings.TrimSpace(test.ErrorDetails) != "" {
 		b.WriteString("## Error details\n```\n")
@@ -265,7 +290,7 @@ func buildLogParsePrompt(test jenkins.FailedTest, logExcerpt string) string {
 // buildLogParseRetryPrompt assembles the retry user message when a previous
 // brief was judged insufficient. It provides the original log, the previous
 // brief, and the feedback critique so the model knows exactly what to fix.
-func buildLogParseRetryPrompt(test jenkins.FailedTest, logExcerpt, prevBrief, critique string) string {
+func buildLogParseRetryPrompt(test jenkins.FailedTest, logExcerpt, archDoc, prevBrief, critique string) string {
 	var b strings.Builder
 	b.WriteString("Your previous investigation brief was reviewed and found to be insufficient. ")
 	b.WriteString("Produce an improved brief that addresses the specific gaps listed below.\n\n")
@@ -279,6 +304,11 @@ func buildLogParseRetryPrompt(test jenkins.FailedTest, logExcerpt, prevBrief, cr
 		fmt.Fprintf(&b, "- Status: %s\n", test.Status)
 	}
 	b.WriteString("\n")
+	if strings.TrimSpace(archDoc) != "" {
+		b.WriteString("## Architecture document\n")
+		b.WriteString(strings.TrimSpace(archDoc))
+		b.WriteString("\n\n")
+	}
 	if strings.TrimSpace(test.ErrorDetails) != "" {
 		b.WriteString("## Error details\n```\n")
 		b.WriteString(strings.TrimSpace(test.ErrorDetails))

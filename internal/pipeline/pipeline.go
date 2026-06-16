@@ -255,7 +255,7 @@ func New(cfg *config.Config, ws *workspace.Workspace, spec PipelineSpec, mode fa
 	return &Pipeline{
 		stages: []Stage{
 			&downloadStage{ws: ws, verbose: verbose},
-			newLogParseStage(ws, spec.LogParse.LLM, mode, lpFB, sc.LogParseMaxFeedbacks, verbose, pauseFn),
+			newLogParseStage(ws, spec.LogParse.LLM, mode, archDoc, lpFB, sc.LogParseMaxFeedbacks, verbose, pauseFn),
 			newHypothesizeStage(ws, spec.Hypothesize.LLM, mode, archDoc, memoryFn, hFB, sc.HypothesizeMaxFeedbacks, verbose, pauseFn),
 			newPlanInspectAllStage(plnr, ws, archDoc, planFB, sc.PlanMaxFeedbacks, verbose, pauseFn),
 			newSetGoalsAllStage(ws, spec.SetGoals.LLM, sgFB, sc.SetGoalsMaxFeedbacks, verbose, pauseFn),
