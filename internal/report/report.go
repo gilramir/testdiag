@@ -73,6 +73,12 @@ func render(r pipeline.FinalResult) string {
 	}
 	b.WriteString("\n---\n\n")
 
+	if st := strings.TrimSpace(r.Test.ErrorStackTrace); st != "" {
+		b.WriteString("## Stack trace\n\n```\n")
+		b.WriteString(st)
+		b.WriteString("\n```\n\n")
+	}
+
 	body := strings.TrimSpace(r.Summary)
 	if body == "" {
 		body = "_The SUMMARIZE stage produced no output._"
