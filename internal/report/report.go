@@ -8,8 +8,29 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/text/language"
+	"golang.org/x/text/message"
+
 	"github.com/gilramir/testdiag/internal/pipeline"
 )
+
+// localePrinter formats numbers according to the running user's locale,
+// detected from LC_NUMERIC, LC_ALL, or LANG (falling back to English).
+var localePrinter = func() *message.Printer {
+	for _, env := range []string{"LC_NUMERIC", "LC_ALL", "LANG"} {
+		if v := os.Getenv(env); v != "" {
+			if i := strings.IndexByte(v, '.'); i >= 0 {
+				v = v[:i]
+			}
+			if t, err := language.Parse(v); err == nil {
+				return message.NewPrinter(t)
+			}
+		}
+	}
+	return message.NewPrinter(language.English)
+}()
+
+func commas(n int) string { return localePrinter.Sprintf("%d", n) }
 
 // Write writes a single diagnosis as a Markdown file under outDir and returns
 // the path written.
@@ -47,8 +68,8 @@ func render(r pipeline.FinalResult) string {
 	fmt.Fprintf(&b, "| Analyzed | %s |\n", time.Now().Format(time.RFC3339))
 	fmt.Fprintf(&b, "| Duration | %s |\n", r.Duration.Round(time.Millisecond))
 	if !r.TotalUsage.IsZero() {
-		fmt.Fprintf(&b, "| Tokens | %d total (%d prompt + %d completion) |\n",
-			r.TotalUsage.Total, r.TotalUsage.Prompt, r.TotalUsage.Completion)
+		fmt.Fprintf(&b, "| Tokens | %s total (%s prompt + %s completion) |\n",
+			commas(r.TotalUsage.Total), commas(r.TotalUsage.Prompt), commas(r.TotalUsage.Completion))
 	}
 	b.WriteString("\n---\n\n")
 
@@ -68,11 +89,11 @@ func render(r pipeline.FinalResult) string {
 			if su.Usage.IsZero() {
 				continue
 			}
-			fmt.Fprintf(&b, "| %s | %d | %d | %d |\n",
-				su.Name, su.Usage.Prompt, su.Usage.Completion, su.Usage.Total)
+			fmt.Fprintf(&b, "| %s | %s | %s | %s |\n",
+				su.Name, commas(su.Usage.Prompt), commas(su.Usage.Completion), commas(su.Usage.Total))
 		}
-		fmt.Fprintf(&b, "| **TOTAL** | **%d** | **%d** | **%d** |\n",
-			r.TotalUsage.Prompt, r.TotalUsage.Completion, r.TotalUsage.Total)
+		fmt.Fprintf(&b, "| **TOTAL** | **%s** | **%s** | **%s** |\n",
+			commas(r.TotalUsage.Prompt), commas(r.TotalUsage.Completion), commas(r.TotalUsage.Total))
 		b.WriteString("\n")
 	}
 
