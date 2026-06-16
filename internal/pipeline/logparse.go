@@ -239,7 +239,8 @@ Read the WHOLE log, not just the first traceback: the first error is usually at 
 
 Work from the log only:
 - Find the FIRST genuine error / assertion / exception / timeout, not the downstream noise it caused.
-- Pull out the concrete identifiers the next stage will need to locate code: file paths, class/function/method names, modules, error messages, log tags, ports, RPC/endpoint names, thread or process names — quote them verbatim from the log.
+- Pull out the concrete identifiers the next stage will need to locate code: class/function/method names, modules, error messages, log tags, ports, RPC/endpoint names, thread or process names — quote them verbatim from the log.
+- File paths: quote ONLY paths that appear verbatim in the log (in stack traces, error messages, or log output). Do NOT invent or infer file paths from class names or package names — the next stage has workspace search tools and will find the file from the symbol name.
 - %s Hypothesize what could explain the failure as %s. Tie each hypothesis to specific evidence in the log (a line, a timestamp gap, an ordering, a stack frame).
 - Separate what the TEST FRAMEWORK observed (assertion messages, setup/teardown output, harness errors) from what the SYSTEM UNDER TEST did (SUT stack frames, SUT log output, SUT error messages, values the SUT returned). If an architecture document is provided, use its module names, package prefixes, and component names to identify SUT-originated lines in the log.
 
@@ -249,7 +250,7 @@ The earliest genuine failure, quoted, with the log location/context that identif
 ## SUT-Side Observations
 Stack frames, log lines, error messages, and values that originated in the system under test rather than the test framework or harness. Use the architecture document (if provided) to distinguish SUT output from test-framework output. If the root cause may lie in the test itself (wrong assertion, bad setup, test-framework bug) rather than the SUT, say so explicitly here.
 ## Source/Logic To Find
-A bulleted list of the specific files, symbols, and call paths the next stage should open, each with WHY (what to confirm there). Include both SUT and test-side candidates when both are plausible. Use the exact identifiers from the log.
+A bulleted list of the specific symbols, class/function names, modules, and call paths the next stage should investigate, each with WHY (what to confirm there). Include both SUT and test-side candidates when both are plausible. Use the exact identifiers from the log. Only include a file path if it appeared verbatim in the log — otherwise list the symbol name so the next stage can locate the file itself.
 %s
 %s
 ## Notes For Next Stage
