@@ -30,16 +30,16 @@ Given a Jenkins build URL:
    | FEEDBACK | Accept hypothesis list or return critique | — |
    | PLANINSPECTION × N | Breadth-first workspace survey → annotated file list for DEEPINSPECT | workspace source tools |
    | FEEDBACK | Accept plan or return critique | — |
-   | SETGOALS × N | Turn the plan into step-by-step inspection goals (file → what to look for → if found / if not found) for DEEPINSPECT | — |
+   | SETGOALS × N | Turn the plan into step-by-step inspection goals (file → what to look for → if found / if not found → which log evidence to reconcile) for DEEPINSPECT | — |
    | FEEDBACK | Accept goals or return critique | — |
-   | DEEPINSPECT × N | Confirm/refute hypothesis via source inspection | workspace source tools |
+   | DEEPINSPECT × N | Confirm/refute hypothesis via source inspection, reconciling code against the failure log | workspace source tools + `grep_log` |
    | FEEDBACK | Accept result or return critique | — |
    | SUMMARIZE | Summarize each hypothesis (noting whether an inspection result exists), then identify the most likely root cause | — |
    | FEEDBACK | Accept synthesis or return critique | — |
    | LESSONS | Meta-analysis of this testdiag run; developer-facing suggestions for improving prompts, tools, and stage design | — |
    | MEMORIZE | Extract durable codebase facts → `.testdiag/memory.md` | — |
 
-   *Workspace source tools* = `read_file`, `list_directory`, `file_exists`, `function_lookup`, `count_lines`, `read_lines`, `grep`, `search_repo`, `find_files`, `git_blame`, `git_log`, `run_script`, `notebook`. The raw-log tools (`read_log`, `grep_log`) are withheld from both PLANINSPECTION and DEEPINSPECT; those stages work from the brief alone. (In practice the inspect engine no longer advertises `notebook` — the fact tree is its working memory — but the tool still exists.)
+   *Workspace source tools* = `read_file`, `list_directory`, `file_exists`, `function_lookup`, `count_lines`, `read_lines`, `grep`, `search_repo`, `find_files`, `git_blame`, `git_log`, `run_script`, `notebook`. Of the raw-log tools, `read_log` (whole-log dumps) is withheld from both PLANINSPECTION and DEEPINSPECT, but DEEPINSPECT keeps `grep_log` so it can pull the specific failure-log lines it needs to reconcile against the source; PLANINSPECTION gets neither and works from the brief alone. (In practice the inspect engine no longer advertises `notebook` — the fact tree is its working memory — but the tool still exists.)
 
    - **DOWNLOAD** — saves the test's full failure log under `.testdiag/logs/`.
    - **LOGPARSE** — one tool-less LLM pass over that log produces an
@@ -61,7 +61,7 @@ Given a Jenkins build URL:
      `search_repo`, `grep`, `read_lines`) and produce a **prioritized, annotated
      list of files** for DEEPINSPECT to examine
      (`.testdiag/handoff/<test>.h<N>.planinspect.md`). A failed plan is
-     noted but does not stop the pipeline; DEEPINSPECT works from the brief alone
+     noted but does not stop the pipeline; DEEPINSPECT works without a plan
      in that case.
    - **FEEDBACK per PLANINSPECTION** — checks each plan; retries up to
      `planinspection_max_feedbacks` times.
@@ -69,7 +69,9 @@ Given a Jenkins build URL:
      hypothesis and that hypothesis's PLANINSPECTION file list (plus the brief)
      and writes a **step-by-step list of inspection goals** that drives
      DEEPINSPECT: which file to examine, what to look for there, what it means if
-     found, and what to do if not found — ending with the criteria for a
+     found, what to do if not found, and — for steps about runtime behavior —
+     which concrete log evidence to reconcile against the code via `grep_log`,
+     ending with the criteria for a
      CONFIRMED / REFUTED / INCONCLUSIVE verdict
      (`.testdiag/handoff/<test>.h<N>.setgoals.md`). A failed goal list is noted but
      does not stop the pipeline; DEEPINSPECT works from the plan (or brief) alone
@@ -77,10 +79,14 @@ Given a Jenkins build URL:
    - **FEEDBACK per SETGOALS** — checks each goal list; retries up to
      `setgoals_max_feedbacks` times.
    - **DEEPINSPECT × N** — one fresh agent per hypothesis, equipped with
-     **workspace source tools** (jailed to the checkout). It receives the
+     **workspace source tools** (jailed to the checkout) plus `grep_log` for
+     searching the saved failure log. It receives the
      hypothesis, the PLANINSPECTION file list, and the SETGOALS goals, and is
-     instructed to work through those goals. Each agent determines whether its hypothesis is CONFIRMED /
-     REFUTED / INCONCLUSIVE. The raw log is withheld entirely. A hypothesis that
+     instructed to work through those goals — reconciling the code against the
+     specific log lines the run produced. Each agent determines whether its hypothesis is CONFIRMED /
+     REFUTED / INCONCLUSIVE; an INCONCLUSIVE verdict must name the specific
+     evidence it could not obtain. Whole-log dumps (`read_log`) are withheld, but
+     targeted `grep_log` searches are allowed. A hypothesis that
      errors or exhausts its feedback budget is marked as failed but does **not**
      stop the pipeline.
    - **FEEDBACK per DEEPINSPECT** — checks each DEEPINSPECT result independently;
@@ -153,14 +159,16 @@ defaults. All paths are workspace-relative.
 | `git_blame` | Blame a line range to find when/why a line last changed | `path`; `start`, `end` (default: a small window from `start`) |
 | `git_log` | Recent commits touching a file or directory | `path` (default: whole repo), `limit` (default), `patch` (default `false`) |
 | `read_log` | Read the saved failure log — **withheld from PLANINSPECTION and DEEPINSPECT** | `path`; `tail` (last N lines) |
-| `grep_log` | Search the failure log with context — **withheld from PLANINSPECTION and DEEPINSPECT** | `path`, `pattern`; `context` (lines each side, default), `ignore_case` (default `false`) |
+| `grep_log` | Search the failure log with context — **withheld from PLANINSPECTION; available to DEEPINSPECT** | `path`, `pattern`; `context` (lines each side, default), `ignore_case` (default `false`) |
 | `run_script` | Write + run a shell/Python script — **only after operator approval** | `language` (shell or Python 3), `script` |
 | `notebook` | Per-hypothesis Markdown scratchpad (working memory) | `action` (`append` / `read`); `note` (required when appending) |
 
-The two log tools are not advertised to PLANINSPECTION or DEEPINSPECT and are
-hard-disabled while either runs, so neither can re-read the raw log — both work from
-the brief. All other stages (LOGPARSE, HYPOTHESIZE, FEEDBACK, SETGOALS, SUMMARIZE,
-LESSONS, MEMORIZE) use no tools; their inputs are given inline.
+PLANINSPECTION gets neither log tool and works from the brief alone. DEEPINSPECT
+keeps `grep_log` — it can search the saved failure log for the specific lines
+(error strings, stack frames, event ordering) it needs to reconcile against the
+source — but `read_log` (whole-log dumps) is hard-disabled so it cannot flood its
+context with the raw log. All other stages (LOGPARSE, HYPOTHESIZE, FEEDBACK,
+SETGOALS, SUMMARIZE, LESSONS, MEMORIZE) use no tools; their inputs are given inline.
 
 **Tool logs** — after each PLANINSPECTION and DEEPINSPECT hypothesis run, testdiag
 writes a compact tool-call log to
@@ -218,7 +226,7 @@ model    = "your-strong-model"
 
 [stages]
 logparse    = "fast"   # reads the log, writes the brief
-deepinspect = "deep"   # gets the brief + plan + source tools, finds the root cause
+deepinspect = "deep"   # gets the brief + plan + source tools + grep_log, finds the root cause
 
 # Optional: override individual stages
 # planinspection           = "deep"   # surveys workspace for relevant files; defaults to deepinspect LLM
