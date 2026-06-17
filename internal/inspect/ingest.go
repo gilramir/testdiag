@@ -134,13 +134,8 @@ func ingest(store *knowledge.Store, c toolproto.Call, res *tools.Result, err err
 // per-file content and returns "path:line" result lines. fixedPath is used when
 // the matches carry no path of their own (grep, which is single-file).
 func ingestMatches(store *knowledge.Store, fixedPath string, m map[string]interface{}) []string {
-	raw, _ := m["matches"].([]interface{})
 	var results []string
-	for _, item := range raw {
-		mm, ok := item.(map[string]interface{})
-		if !ok {
-			continue
-		}
+	for _, mm := range matchMaps(m["matches"]) {
 		path := strv(mm, "path", fixedPath)
 		line := intv(mm, "line", 0)
 		text := strv(mm, "text", "")
@@ -150,6 +145,28 @@ func ingestMatches(store *knowledge.Store, fixedPath string, m map[string]interf
 		}
 	}
 	return results
+}
+
+// matchMaps coerces a tool result's "matches" field into a slice of maps. The
+// grep/search_repo tools build their matches as []map[string]interface{} and
+// the inspect engine ingests the native result with no JSON round-trip, so we
+// must accept that shape directly; we also tolerate the []interface{} a JSON
+// round-trip would produce, so the function works regardless of how the result
+// reached us.
+func matchMaps(raw interface{}) []map[string]interface{} {
+	switch v := raw.(type) {
+	case []map[string]interface{}:
+		return v
+	case []interface{}:
+		out := make([]map[string]interface{}, 0, len(v))
+		for _, item := range v {
+			if mm, ok := item.(map[string]interface{}); ok {
+				out = append(out, mm)
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 // recordFailure notes a failed or errored call so the model sees that it failed
