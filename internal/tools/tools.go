@@ -107,23 +107,43 @@ func SetDebug(v bool) { debug.Store(v) }
 // engine to decide whether to print the full LLM request/response each turn.
 func DebugEnabled() bool { return debug.Load() }
 
-// logToolsEnabled gates the log-reading tools (read_log, grep_log). The
-// DEEPINSPECT stage turns it off so the agent works only from the LOGPARSE
-// investigation brief and cannot re-read the raw failure log. It is a
-// process-global for the same reason as verbose: the tools are shared, stateless
-// singletons. It defaults to enabled.
-var logToolsEnabled atomic.Bool
+// readLogEnabled and grepLogEnabled independently gate the two raw-log tools.
+// They are process-globals for the same reason as verbose: the tools are shared,
+// stateless singletons. Both default to enabled.
+//
+// DEEPINSPECT turns read_log OFF (it must not dump the whole failure log back
+// into its context) but leaves grep_log ON, so it can pull the specific lines —
+// the exact error string, the stack frames, the ordering of events — needed to
+// reconcile the LOGPARSE brief against the actual source. Confirming a runtime
+// hypothesis means correlating the code with what the run actually did, and
+// grep_log is the narrow, output-capped window onto that evidence.
+var (
+	readLogEnabled atomic.Bool
+	grepLogEnabled atomic.Bool
+)
 
-func init() { logToolsEnabled.Store(true) }
+func init() {
+	readLogEnabled.Store(true)
+	grepLogEnabled.Store(true)
+}
 
-// SetLogToolsEnabled enables or disables the raw-log tools (read_log, grep_log).
-// When disabled, those tools refuse the call and tell the model to work from the
-// investigation brief instead. Set per stage before building the agent.
-func SetLogToolsEnabled(v bool) { logToolsEnabled.Store(v) }
+// SetReadLogEnabled gates read_log alone. When disabled, read_log refuses the
+// call and points the model at grep_log (and the investigation brief) instead.
+func SetReadLogEnabled(v bool) { readLogEnabled.Store(v) }
 
-// LogToolNames lists the tools that read the raw failure log. DEEPINSPECT is
-// hard-blocked from these — they are excluded from the tool set advertised to it
-// (see Schemas/SchemasExcluding) and gated off via SetLogToolsEnabled.
+// SetGrepLogEnabled gates grep_log alone.
+func SetGrepLogEnabled(v bool) { grepLogEnabled.Store(v) }
+
+// SetLogToolsEnabled flips both raw-log tools together — a convenience for
+// callers and tests that want the all-on or all-off state.
+func SetLogToolsEnabled(v bool) {
+	readLogEnabled.Store(v)
+	grepLogEnabled.Store(v)
+}
+
+// LogToolNames lists the tools that read the raw failure log. The set advertised
+// to a stage is chosen via Schemas/SchemasExcluding; each tool is gated
+// independently via SetReadLogEnabled/SetGrepLogEnabled.
 var LogToolNames = []string{"read_log", "grep_log"}
 
 // vlogf writes a tool progress line to stderr when verbose mode is on. Each call

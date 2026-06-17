@@ -37,8 +37,8 @@ func (t *readLogTool) JSONSchema() map[string]interface{} {
 	}
 }
 func (t *readLogTool) Execute(ctx context.Context, args map[string]interface{}) (*Result, error) {
-	if !logToolsEnabled.Load() {
-		return fail("read_log: the raw failure log is not available at this stage. Work from the investigation brief you were given and trace into the actual source files instead.")
+	if !readLogEnabled.Load() {
+		return fail("read_log: the whole failure log is not available at this stage — dumping it would flood your context. Use grep_log on the log path you were given to pull the specific lines you need (the error string, the stack frames around it, the ordering of events), then trace those into the actual source files.")
 	}
 	path, has := strArg(args, "path")
 	if !has {
@@ -109,7 +109,7 @@ func (t *grepLogTool) JSONSchema() map[string]interface{} {
 	}
 }
 func (t *grepLogTool) Execute(ctx context.Context, args map[string]interface{}) (*Result, error) {
-	if !logToolsEnabled.Load() {
+	if !grepLogEnabled.Load() {
 		return fail("grep_log: the raw failure log is not available at this stage. Work from the investigation brief you were given and trace into the actual source files instead.")
 	}
 	path, has := strArg(args, "path")

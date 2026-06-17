@@ -134,16 +134,17 @@ Output nothing else.`
 // setGoalsFeedbackPrompt is the criteria for a SETGOALS output.
 const setGoalsFeedbackPrompt = `You are reviewing a step-by-step inspection goal list produced by the SETGOALS stage. The list will drive a deep-inspection agent (DEEPINSPECT) that reads workspace source files to confirm or refute ONE specific hypothesis about a failing test.
 
-A good goal list must satisfy ALL SIX criteria:
+A good goal list must satisfy ALL SEVEN criteria:
 1. Contains an "## Inspection Goals" section that is an ORDERED (numbered) list of at least two concrete steps.
 2. Goal 1 directs DEEPINSPECT to read the file(s) that define expected behavior — an interface, entry point, test, or core logic path — and establish what correct operation looks like for the condition the hypothesis turns on. A goal 1 that jumps straight to looking for a defect without first establishing expected behavior fails this criterion.
 3. Each step names a specific workspace file (and, where possible, a symbol or line region) — not vague prose like "look at the relevant code." When an inspection plan was provided, the files should come from it.
 4. Each step states WHAT to look for in that file and ties it to the hypothesis.
 5. Each step specifies BOTH what it means if the thing IS found AND what to do if it is NOT found (a fallback or next step).
 6. Steps are ordered most-decisive-first and cover both sides of the hypothesis boundary, and the list ends with a "## Verdict Criteria" note defining what evidence justifies CONFIRMED vs REFUTED vs INCONCLUSIVE.
+7. Any goal that turns on what the run actually did — an error raised, a timeout fired, an ordering of events — cites the concrete log evidence from the brief and directs DEEPINSPECT to reconcile it against the code (via grep_log on the failure log). A goal list that only inspects code without ever tying it back to the logged failure fails this criterion.
 
 Respond with EXACTLY ONE of:
-- The single word APPROVED if all six criteria are met, OR
+- The single word APPROVED if all seven criteria are met, OR
 - NEEDS REVISION: followed by a concise bulleted list of exactly what is missing or unclear.
 
 Output nothing else.`
@@ -158,11 +159,12 @@ func buildDeepInspectFeedbackPrompt(m failmode.Mode) string {
 	}
 	return fmt.Sprintf(`You are a code investigation reviewer. You will be shown an analysis produced by a deep-inspection agent that investigated one specific hypothesis about a %s. Assess whether the analysis is adequate.
 
-A good DEEPINSPECT analysis must satisfy ALL FOUR criteria:
-1. The ## Verdict section must begin with exactly one of the words CONFIRMED, REFUTED, or INCONCLUSIVE (in all caps). An absent, ambiguous, or hedged verdict fails this criterion.
+A good DEEPINSPECT analysis must satisfy ALL FIVE criteria:
+1. The ## Verdict section must begin with exactly one of the words CONFIRMED, REFUTED, or INCONCLUSIVE (in all caps). An absent, ambiguous, or hedged verdict fails this criterion. If the verdict is INCONCLUSIVE, the verdict sentence must name the SPECIFIC evidence that was needed and could not be obtained (and why) — a bare "not enough evidence" with no missing-evidence statement fails this criterion.
 2. Cite real file paths and line numbers from the workspace (not just prose assertions).
 3. Identify or rule out %s.
 4. Provide enough evidence that a human engineer can independently verify the conclusion.
+5. Reconcile the source against the actual failure log: cite the specific log lines (error, stack frame, event ordering) the run produced and show whether the code's behavior matches them. A CONFIRMED or REFUTED verdict reached purely from reading code, without grounding it in what the log shows actually happened, is too shallow and fails this criterion. (A genuine INCONCLUSIVE that documents an unsuccessful grep_log search and names the missing evidence satisfies it.)
 
 If the analysis includes an "## Alternative Cause Discovered" section, treat it as a BONUS — it must not be penalized, and it does not need to be fully proven. Only judge it harshly if it contradicts the cited evidence.
 
@@ -174,7 +176,7 @@ A tool call log may be provided showing what the deep-inspection agent actually 
 Cite specific tool call numbers in your critique when the log reveals a gap.
 
 Respond with EXACTLY ONE of:
-- The single word APPROVED if all four criteria are met, OR
+- The single word APPROVED if all five criteria are met, OR
 - NEEDS REVISION: followed by a concise bulleted list of exactly what is missing or unclear (cite tool call numbers when relevant).
 
 Output nothing else.`, m.ShortLabel(), condition)

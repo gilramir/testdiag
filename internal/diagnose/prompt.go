@@ -14,7 +14,7 @@ import (
 // static System message every turn but rebuilds the User message from the
 // freshly-rendered knowledge tree each round. Anything the agent must not forget
 // belongs in the System prompt.
-func buildSystemPrompt(m failmode.Mode, brief, hypothesis, plan, goals, sourceFile string, maxToolIterations int) string {
+func buildSystemPrompt(m failmode.Mode, brief, hypothesis, plan, goals, sourceFile, logPath string, maxToolIterations int) string {
 	var b strings.Builder
 
 	fmt.Fprintf(&b, `You are an expert software engineer and CI failure analyst. Your job is to investigate ONE specific hypothesis about why a test failed, find evidence confirming or refuting it in the actual source code, and report your conclusion.
@@ -26,7 +26,7 @@ You are given:
 - A set of INSPECTION GOALS (when available) — an ordered, step-by-step plan telling you which files to examine, what to look for, and what to do depending on what you find; follow it
 - The LIKELY SOURCE FILE for the failing test (when the test→source mapper resolved one) — a good first place to look
 
-THERE ARE NO LOGS FOR YOU TO READ. The failure log has already been consumed and is NOT available. Everything useful from the log is in the brief. Do not look for log files.
+YOUR PRIMARY SOURCE IS THE BRIEF. The failure log has been distilled into the investigation brief below — read it first. You CANNOT dump the whole log (read_log is disabled, and it would flood your context), but the saved log is still on disk and you have grep_log to search it. Use grep_log to pull the exact lines you need — the precise error string, the stack frames around it, the order in which events actually happened — and reconcile them against the source. Confirming a hypothesis means SHOWING the code's behavior matches what the log proves actually happened; refuting it means showing it does not. The failure-log path is given below. Do NOT search the SOURCE tree for log files — there are none there.
 
 CRITICAL — %s %s
 
@@ -38,7 +38,8 @@ You have tools to explore the workspace:
 - list_directory(path): list a directory's entries.
 - count_lines(paths): line counts (like wc -l) — use before reading large files.
 - read_lines(path, start, end): read a line range.
-- grep(path, pattern, ignore_case): find matching lines in ONE file.
+- grep(path, pattern, ignore_case): find matching lines in ONE source file.
+- grep_log(path, pattern, context, ignore_case): search the saved FAILURE LOG (the path given below) and get matching lines with surrounding context — use it to pull the exact error, the stack frames, or the event ordering from the run so you can reconcile them against the code. This is your window onto what ACTUALLY happened; the source tells you what SHOULD happen, and the verdict turns on whether the two match.
 - read_file(path): read a whole file — only for small files; large files are truncated.
 - find_files(pattern, path): locate files by name/glob across the tree.
 - search_repo(pattern, path, include, ignore_case): recursively grep the whole tree — use sparingly with an include glob.
@@ -55,16 +56,16 @@ Tool paths are always WORKSPACE-RELATIVE. Never pass an absolute path.
 REQUIRED: you MUST end your investigation with one of exactly three verdicts for the hypothesis:
 - **CONFIRMED** — the evidence shows the hypothesis explains the failure.
 - **REFUTED** — the evidence rules it out.
-- **INCONCLUSIVE** — you could not gather enough evidence to decide either way.
+- **INCONCLUSIVE** — you could not gather enough evidence to decide either way. INCONCLUSIVE is not a free pass: if you land here you MUST name, in the verdict sentence, the EXACT evidence you needed and could not obtain, and why (e.g. "needed the server-side log line proving the timeout fired, but the brief and log show only the client side"; "needed to run the test to observe the goroutine ordering, which read-only tools cannot do"). Before settling for INCONCLUSIVE, check you have actually used grep_log to search the failure log for the decisive error/stack frame — a bare "not enough evidence" without that search, and without a specific missing-evidence statement, is not acceptable.
 Do not finish without committing to one of these three words.
 
 When finished, STOP calling tools and reply with your final analysis as Markdown with exactly these sections:
 ## Hypothesis
 State the hypothesis you investigated.
 ## Verdict
-Must be the single word CONFIRMED, REFUTED, or INCONCLUSIVE followed by one sentence explaining why.
+Must be the single word CONFIRMED, REFUTED, or INCONCLUSIVE followed by one sentence explaining why. For INCONCLUSIVE, that sentence MUST name the specific missing evidence and why it was unobtainable (see above).
 ## Evidence
-Real file paths and line numbers you read, on both sides of any boundary.
+Real file paths and line numbers you read, on both sides of any boundary, plus the specific failure-log lines (from grep_log) you reconciled them against.
 ## Mechanism
 %s
 ## Confidence
@@ -93,6 +94,10 @@ OPTIONAL — include this section ONLY if you found a strong, evidence-backed ro
 		b.WriteString("\n\n## Inspection goals (from SETGOALS)\n")
 		b.WriteString("These ordered goals were derived from the inspection plan to drive your investigation. Work through them in order: each names a file and what to look for, and tells you what it means whether or not you find it. Follow the \"if found / if not found\" guidance, but stay alert for a better explanation.\n\n")
 		b.WriteString(strings.TrimSpace(goals))
+	}
+
+	if strings.TrimSpace(logPath) != "" {
+		fmt.Fprintf(&b, "\n\n## Saved failure log\nThe full failure log is saved at `%s`. You cannot read it whole, but you can search it with grep_log(path=\"%s\", pattern=...) to pull the exact error lines, stack frames, and event ordering you need to reconcile against the source. Reach for it whenever a step turns on what the run ACTUALLY did.", strings.TrimSpace(logPath), strings.TrimSpace(logPath))
 	}
 
 	fmt.Fprintf(&b, "\n\n## Tool budget and working memory\n"+

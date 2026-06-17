@@ -21,7 +21,7 @@ SUMMARIZE → FEEDBACK → LESSONS
 - **FEEDBACK** — gate on the hypothesis list (`hypothesize_max_feedbacks`)
 - **PLANINSPECTION × N** — one fresh tool-using agent per hypothesis; breadth-first workspace survey that produces a prioritized, annotated file list for DEEPINSPECT to follow; soft-fails per hypothesis. Runs on the **own tool-loop engine** (`internal/inspect`) — see the inspect/knowledge note below.
 - **FEEDBACK per PLANINSPECTION** — gate on each plan (`planinspection_max_feedbacks`); also a deterministic Go gate that rejects any plan listing files that do not exist in the workspace (see `internal/pipeline/planinspect.go`)
-- **SETGOALS × N** — one tool-less LLM pass per hypothesis; reads the hypothesis and that hypothesis's PLANINSPECTION file list (plus the brief) and writes a step-by-step list of inspection goals that drives DEEPINSPECT: which file to read, what to look for there, what it means if found, and what to do if not found. Soft-fails per hypothesis. Output at `.testdiag/handoff/<test>.h<N>.setgoals.md`.
+- **SETGOALS × N** — one tool-less LLM pass per hypothesis; reads the hypothesis and that hypothesis's PLANINSPECTION file list (plus the brief) and writes a step-by-step list of inspection goals that drives DEEPINSPECT: which file to read, what to look for there, what it means if found, what to do if not found, and (for steps about runtime behavior) which concrete log evidence DEEPINSPECT must reconcile against the code via `grep_log`. Soft-fails per hypothesis. Output at `.testdiag/handoff/<test>.h<N>.setgoals.md`.
 - **FEEDBACK per SETGOALS** — gate on each goal list (`setgoals_max_feedbacks`)
 - **DEEPINSPECT × N** — one fresh agent per hypothesis, jailed to the workspace source tools; receives the hypothesis, the PLANINSPECTION plan, and the SETGOALS goals, and investigates whether that hypothesis is CONFIRMED / REFUTED / INCONCLUSIVE. Also runs on the `internal/inspect` engine.
 - **FEEDBACK per DEEPINSPECT** — gate on each DEEPINSPECT result (`deepinspect_max_feedbacks`); a failed hypothesis is soft-failed (noted but does not stop the pipeline)
@@ -129,7 +129,8 @@ The pipeline is sequential: fetch failures → run each failure through the stag
     runs a **tool-less** `inspect.Complete` pass (no workspace exploration — the
     planner already did that) that turns the hypothesis + that hypothesis's
     PLANINSPECTION file list + the brief into a numbered, step-by-step list of
-    inspection goals (file → what to look for → if-found → if-not-found) plus a
+    inspection goals (file → what to look for → if-found → if-not-found → which
+    log evidence to reconcile via `grep_log`) plus a
     "Verdict Criteria" note, for DEEPINSPECT to follow. Retries with FEEDBACK up to
     `setgoals_max_feedbacks` times; soft-fails per hypothesis; results accumulate in
     `sc.SetGoals`; output at `.testdiag/handoff/<test>.h<N>.setgoals.md`. DEEPINSPECT
@@ -191,11 +192,19 @@ The pipeline is sequential: fetch failures → run each failure through the stag
   **stateless** instance reused across every test — never store per-test state on
   a tool. All have hard output caps (file size, line span,
   match/entry/file counts) to protect the context window. The two log tools
-  (`read_log`, `grep_log`, named in `tools.LogToolNames`) are gated by a
-  package-level flag: DEEPINSPECT calls `tools.SetLogToolsEnabled(false)` so they
-  refuse to run, and they are also excluded from the tool set it advertises
-  (`tools.SchemasExcluding(tools.LogToolNames...)`) — defense in depth so the deep
-  agent works from the brief, not the raw log. One exception to the read-only rule:
+  (`read_log`, `grep_log`, named in `tools.LogToolNames`) are gated by two
+  **independent** package-level flags (`SetReadLogEnabled`/`SetGrepLogEnabled`,
+  both defaulting on; `SetLogToolsEnabled` flips both together for tests/callers
+  that want the all-on or all-off state). DEEPINSPECT disables `read_log` only —
+  it must not dump the whole failure log back into its context — but keeps
+  `grep_log` enabled (and advertised) so it can pull the specific lines (error
+  strings, stack frames, event ordering) it needs to reconcile the brief's claims
+  against the source. Confirming a *runtime* hypothesis means correlating the code
+  with what the run actually did, so the deep agent gets a narrow, capped window
+  onto that log evidence rather than being blinded to it. The `search_repo`/
+  `find_files` log-hunt guard (which refuses queries hunting for log files in the
+  source tree) keys on `readLogEnabled`, so it stays active for DEEPINSPECT and
+  redirects the agent to `grep_log` on the saved log path. One exception to the read-only rule:
   `run_script` writes and executes a shell/Python script in the workspace root, but
   only after the operator approves the exact script at a `1 = Yes / 2 = No` prompt;
   a decline runs nothing. The other writer is `notebook` (`append`/`read`): a
@@ -258,13 +267,17 @@ The pipeline is sequential: fetch failures → run each failure through the stag
 
 - **`internal/diagnose`** — the DEEPINSPECT stage layer. `Diagnoser.New(ws, llm, mode,
   background, memory, maxToolIterations, maxChars, mapper, interrupt, drainFn)` creates
-  a diagnoser. `Diagnose(ctx, DiagnoseInput{Test, Brief, Hypothesis, HypothesisIndex,
-  Plan, Goals, PrevResult, Critique})` maps the test (via `internal/mapping`), hard-disables
-  the log tools, builds a fresh `inspect.Engine` (advertising the source tools minus
-  the log tools and the dormant `notebook`), and runs it once. When `PrevResult`+
+  a diagnoser. `Diagnose(ctx, DiagnoseInput{Test, Brief, LogPath, Hypothesis, HypothesisIndex,
+  Plan, Goals, PrevResult, Critique})` maps the test (via `internal/mapping`), disables
+  `read_log` (no whole-log dumps) but leaves `grep_log` enabled, builds a fresh
+  `inspect.Engine` (advertising the source tools plus `grep_log`, minus `read_log`
+  and the dormant `notebook`), and runs it once. When `PrevResult`+
   `Critique` are set, the `Task` includes the prior draft and feedback so the retry
-  goes deeper. The `brief`, `hypothesis`, **inspection plan, SETGOALS goals, and mapped
-  source file** go in the **system prompt** so they persist across every turn of the loop. The
+  goes deeper. The `brief`, `hypothesis`, **inspection plan, SETGOALS goals, mapped
+  source file, and saved failure-log path** (which `grep_log` can search) go in the
+  **system prompt** so they persist across every turn of the loop. The verdict
+  contract requires an INCONCLUSIVE result to name the specific evidence it could
+  not obtain. The
   prompt also (a) permits a serendipitous "## Alternative Cause Discovered" section,
   and (b) reframes the tool budget to verify both sides of the hypothesis boundary.
   No internal critique/revise loop — that is handled externally by

@@ -116,13 +116,14 @@ func (t *searchRepoTool) Execute(ctx context.Context, args map[string]interface{
 	if !has {
 		return fail("search_repo: 'regex' is required")
 	}
-	// When the raw log is withheld (DEEPINSPECT), refuse a search that is clearly
-	// hunting for a log file (e.g. "failure.log", "log.txt", "*.log") rather than
-	// source code: there is no failure log in the workspace — it was consumed by
-	// the earlier stage and everything from it is in the investigation brief.
-	if !logToolsEnabled.Load() {
+	// When whole-log reads are withheld (DEEPINSPECT), refuse a search that is
+	// clearly hunting for a log file (e.g. "failure.log", "log.txt", "*.log") in
+	// the SOURCE tree: the failure log does not live there. The agent should
+	// search it with grep_log on the log path it was given, and point search_repo
+	// at actual source files.
+	if !readLogEnabled.Load() {
 		if q := logHuntQuery(args); q != "" {
-			return fail("search_repo: %q looks like an attempt to find a log file. There is no failure log in the workspace — it was consumed by the earlier stage and everything relevant is already in the investigation brief. Do NOT search for logs; go straight to the SOURCE files the brief names.", q)
+			return fail("search_repo: %q looks like an attempt to find a log file in the source tree. The failure log is not in the source tree — search it with grep_log on the log path you were given. Point search_repo at SOURCE files instead.", q)
 		}
 	}
 
@@ -336,13 +337,13 @@ func (t *findFilesTool) Execute(ctx context.Context, args map[string]interface{}
 	if !has {
 		return fail("find_files: 'pattern' is required")
 	}
-	// When the raw log is withheld (DEEPINSPECT), refuse a lookup that is clearly
-	// hunting for a log file (e.g. "failure.log", "log.txt", "*.log"): there is no
-	// failure log in the workspace — it was consumed by the earlier stage and
-	// everything from it is in the investigation brief.
-	if !logToolsEnabled.Load() {
+	// When whole-log reads are withheld (DEEPINSPECT), refuse a lookup that is
+	// clearly hunting for a log file (e.g. "failure.log", "log.txt", "*.log") in
+	// the SOURCE tree: the failure log does not live there. The agent should
+	// search it with grep_log on the log path it was given.
+	if !readLogEnabled.Load() {
 		if q := logHuntQuery(args); q != "" {
-			return fail("find_files: %q looks like an attempt to find a log file. There is no failure log in the workspace — it was consumed by the earlier stage and everything relevant is already in the investigation brief. Do NOT look for logs; go straight to the SOURCE files the brief names.", q)
+			return fail("find_files: %q looks like an attempt to find a log file in the source tree. The failure log is not in the source tree — search it with grep_log on the log path you were given. Use find_files for SOURCE files instead.", q)
 		}
 	}
 	base := "."

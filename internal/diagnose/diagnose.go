@@ -7,9 +7,12 @@
 // stage), so this package is a pure "run one investigation, return the result"
 // layer.
 //
-// The agent is NOT given the raw Jenkins log. It works from the investigation
-// brief produced by LOGPARSE and the specific hypothesis from HYPOTHESIZE. The
-// raw-log tools are hard-disabled for the duration of the run.
+// The agent's primary source is the investigation brief produced by LOGPARSE
+// plus the specific hypothesis from HYPOTHESIZE. It cannot dump the whole raw
+// log (read_log is hard-disabled for the run), but it CAN search the saved
+// failure log with grep_log to pull the specific lines — error strings, stack
+// frames, event ordering — needed to reconcile the brief's claims against the
+// actual source, which is what confirming a runtime hypothesis requires.
 package diagnose
 
 import (
@@ -29,7 +32,8 @@ import (
 // DiagnoseInput carries everything a single DEEPINSPECT attempt needs.
 type DiagnoseInput struct {
 	Test            jenkins.FailedTest
-	Brief           string // LOGPARSE handoff (not the raw log)
+	Brief           string // LOGPARSE handoff (the distilled log)
+	LogPath         string // workspace-relative saved failure log, for grep_log (may be empty)
 	Hypothesis      string // the full hypothesis text to investigate
 	HypothesisIndex int    // 1-based index
 	Plan            string // PLAN output: annotated file list (may be empty)
@@ -97,13 +101,20 @@ func (d *Diagnoser) Diagnose(ctx context.Context, input DiagnoseInput) (Result, 
 		m = mapping.Result{}
 	}
 
-	// Hard-block the raw failure log: DEEPINSPECT works only from the brief.
-	tools.SetLogToolsEnabled(false)
-	defer tools.SetLogToolsEnabled(true)
+	// Block whole-log dumps (read_log) but keep grep_log: DEEPINSPECT confirms a
+	// runtime hypothesis by reconciling the source against what the run actually
+	// did, and grep_log is its narrow, capped window onto that log evidence.
+	tools.SetReadLogEnabled(false)
+	tools.SetGrepLogEnabled(true)
+	defer func() {
+		tools.SetReadLogEnabled(true)
+		tools.SetGrepLogEnabled(true)
+	}()
 
-	// DEEPINSPECT never needs the raw log or the notebook (the knowledge tree is
-	// its working memory now), but it keeps run_script for verification.
-	exclude := append(append([]string{}, tools.LogToolNames...), "notebook")
+	// DEEPINSPECT never needs read_log (no whole-log dumps) or the notebook (the
+	// knowledge tree is its working memory now), but it keeps grep_log for
+	// targeted log evidence and run_script for verification.
+	exclude := []string{"read_log", "notebook"}
 	engine := inspect.NewEngine(d.llm, inspect.Options{
 		MaxIterations: d.maxToolIterations,
 		MaxChars:      d.maxChars,
@@ -116,7 +127,7 @@ func (d *Diagnoser) Diagnose(ctx context.Context, input DiagnoseInput) (Result, 
 	tools.ResetFindFilesCache()
 
 	r, err := engine.Run(ctx, inspect.RunInput{
-		System: buildSystemPrompt(d.mode, input.Brief, input.Hypothesis, input.Plan, input.Goals, m.SourceFile, d.maxToolIterations),
+		System: buildSystemPrompt(d.mode, input.Brief, input.Hypothesis, input.Plan, input.Goals, m.SourceFile, input.LogPath, d.maxToolIterations),
 		Task:   buildUserPrompt(input, d.background, d.memoryFn()),
 	})
 	if err != nil {

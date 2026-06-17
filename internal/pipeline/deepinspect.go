@@ -80,6 +80,7 @@ func (s *deepInspectAllStage) runOne(ctx context.Context, sc *Context, h Hypothe
 		res, err := s.d.Diagnose(ctx, diagnose.DiagnoseInput{
 			Test:            sc.Test,
 			Brief:           sc.Brief,
+			LogPath:         sc.LogPath,
 			Hypothesis:      h.Text(),
 			HypothesisIndex: h.Index,
 			Plan:            planContent,
